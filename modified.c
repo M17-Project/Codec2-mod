@@ -16,6 +16,10 @@
 #define M_PI 3.14159265358979323846
 #endif
 
+#ifndef POW10F
+#define POW10F(x) powf(10.0f, (x))
+#endif
+
 #define N_S 0.01   /* internal proc frame length in secs   */
 #define TW_S 0.005 /* trapezoidal synth window overlap     */
 #define MAX_AMP 80 /* maximum number of harmonics          */
@@ -71,8 +75,15 @@
 
 #define LSP_DELTA1 0.01 /* grid spacing for LSP root searches */
 
+#define BG_THRESH 40.0 /* only consider low levels signals for bg_est */
+#define BG_BETA 0.1	   /* averaging filter constant                   */
+#define BG_MARGIN 6.0
+
 /* bandpass filter taps? */
 #define BPF_N 101
+
+/* random number generator stuff */
+#define CODEC2_RAND_MAX 32767
 
 /* consts */
 const float nlp_fir[NLP_NTAP] = {
@@ -115,6 +126,7 @@ typedef struct nlp_t
 
 typedef struct codec2_t
 {
+	unsigned long next_rn;			   /* for the pseudorandom number geneartor     */
 	kiss_fft_cfg fft_fwd_cfg;		   /* forward FFT config                        */
 	kiss_fftr_cfg fftr_fwd_cfg;		   /* forward real FFT config                   */
 	float w[M_PITCH];				   /* [m_pitch] time domain hamming window      */
@@ -252,6 +264,8 @@ void nlp_init(nlp_t *nlp)
 void codec2_init(codec2_t *c2)
 {
 	int i, l;
+
+	c2->next_rn = 1;
 
 	for (i = 0; i < M_PITCH; i++)
 		c2->Sn[i] = 1.0f;
@@ -714,6 +728,200 @@ float nlp(
 	return (best_f0);
 }
 
+void sample_phase(model_t *model, complex_t *H,
+				  complex_t *A /* LPC analysis filter in freq domain */
+)
+{
+	int m, b;
+	float r;
+
+	r = 2.0f * M_PI / (FFT_ENC);
+
+	/* Sample phase at harmonics */
+	for (m = 1; m <= model->L; m++)
+	{
+		b = (int)(m * model->Wo / r + 0.5);
+		/* synth filter 1/A is opposite phase to analysis filter */
+		// H[m] = cconj(A[b]);
+		H[m].r = A[b].r;
+		H[m].i = -A[b].i;
+	}
+}
+
+int codec2_rand(unsigned long *prng_state)
+{
+	*prng_state = *prng_state * 1103515245 + 12345;
+	return ((unsigned)(*prng_state / 65536) % 32768);
+}
+
+void postfilter(codec2_t *c2, model_t *model, float *bg_est)
+{
+	int m, uv;
+	float e, thresh;
+
+	/* determine average energy across spectrum */
+	e = 1E-12;
+	for (m = 1; m <= model->L; m++)
+		e += model->A[m] * model->A[m];
+
+	e = 10.0 * log10f(e / model->L);
+
+	/* If beneath threshold, update bg estimate.  The idea
+	   of the threshold is to prevent updating during high level
+	   speech. */
+	if ((e < BG_THRESH) && !model->voiced)
+		*bg_est = *bg_est * (1.0 - BG_BETA) + e * BG_BETA;
+
+	/* now mess with phases during voiced frames to make any harmonics
+	   less then our background estimate unvoiced.
+	*/
+	uv = 0;
+	thresh = POW10F((*bg_est + BG_MARGIN) / 20.0);
+	if (model->voiced)
+		for (m = 1; m <= model->L; m++)
+			if (model->A[m] < thresh)
+			{
+				model->phi[m] = (2.0f * M_PI / CODEC2_RAND_MAX) * (float)codec2_rand(&c2->next_rn);
+				uv++;
+			}
+}
+
+void synthesise(kiss_fftr_cfg fftr_inv_cfg,
+				float *Sn_,		/* time domain synthesised signal              */
+				model_t *model, /* ptr to model parameters for this frame      */
+				float *Pn,		/* time domain Parzen window                   */
+				int shift		/* flag used to handle transition frames       */
+)
+{
+	int i, l, j, b;					/* loop variables */
+	complex_t Sw_[FFT_DEC / 2 + 1]; /* DFT of synthesised signal */
+	float sw_[FFT_DEC];				/* synthesised signal */
+
+	if (shift)
+	{
+		/* Update memories */
+		for (i = 0; i < N_SAMP - 1; i++)
+		{
+			Sn_[i] = Sn_[i + N_SAMP];
+		}
+		Sn_[N_SAMP - 1] = 0.0;
+	}
+
+	for (i = 0; i < FFT_DEC / 2 + 1; i++)
+	{
+		Sw_[i].r = 0.0;
+		Sw_[i].i = 0.0;
+	}
+
+	/* Now set up frequency domain synthesised speech */
+	for (l = 1; l <= model->L; l++)
+	{
+		b = (int)(l * model->Wo * FFT_DEC / (2.0f * M_PI) + 0.5);
+		if (b > ((FFT_DEC / 2) - 1))
+		{
+			b = (FFT_DEC / 2) - 1;
+		}
+		Sw_[b].r = model->A[l] * cosf(model->phi[l]);
+		Sw_[b].i = model->A[l] * sinf(model->phi[l]);
+	}
+
+	/* Perform inverse DFT */
+	kiss_fftri(fftr_inv_cfg, Sw_, sw_);
+
+	/* Overlap add to previous samples */
+	for (i = 0; i < N_SAMP - 1; i++)
+	{
+		Sn_[i] += sw_[FFT_DEC - N_SAMP + 1 + i] * Pn[i];
+	}
+
+	if (shift)
+		for (i = N_SAMP - 1, j = 0; i < 2 * N_SAMP; i++, j++)
+			Sn_[i] = sw_[j] * Pn[i];
+	else
+		for (i = N_SAMP - 1, j = 0; i < 2 * N_SAMP; i++, j++)
+			Sn_[i] += sw_[j] * Pn[i];
+}
+
+void phase_synth_zero_order(
+	codec2_t *c2,
+	model_t *model,
+	float *ex_phase, /* excitation phase of fundamental        */
+	complex_t *H	 /* L synthesis filter freq domain samples */
+
+)
+{
+	int m;
+	float new_phi;
+	complex_t Ex[MAX_AMP + 1]; /* excitation samples */
+	complex_t A_[MAX_AMP + 1]; /* synthesised harmonic samples */
+
+	/*
+	   Update excitation fundamental phase track, this sets the position
+	   of each pitch pulse during voiced speech.  After much experiment
+	   I found that using just this frame's Wo improved quality for UV
+	   sounds compared to interpolating two frames Wo like this:
+
+	   ex_phase[0] += (*prev_Wo+model->Wo)*N_SAMP/2;
+	*/
+	ex_phase[0] += (model->Wo) * N_SAMP;
+	ex_phase[0] -= 2.0f * M_PI * floorf(ex_phase[0] / (2.0f * M_PI) + 0.5);
+
+	for (m = 1; m <= model->L; m++)
+	{
+		/* generate excitation */
+		if (model->voiced)
+		{
+			Ex[m].r = cosf(ex_phase[0] * m);
+			Ex[m].i = sinf(ex_phase[0] * m);
+		}
+		else
+		{
+			/* When a few samples were tested I found that LPC filter
+			   phase is not needed in the unvoiced case, but no harm in
+			   keeping it.
+			*/
+			float phi = 2.0f * M_PI * (float)codec2_rand(&c2->next_rn) / CODEC2_RAND_MAX;
+			Ex[m].r = cosf(phi);
+			Ex[m].i = sinf(phi);
+		}
+
+		/* filter using LPC filter */
+
+		A_[m].r = H[m].r * Ex[m].r - H[m].i * Ex[m].i;
+		A_[m].i = H[m].i * Ex[m].r + H[m].r * Ex[m].i;
+
+		/* modify sinusoidal phase */
+
+		new_phi = atan2f(A_[m].i, A_[m].r + 1E-12);
+		model->phi[m] = new_phi;
+	}
+}
+
+void ear_protection(float *in_out, int n)
+{
+	float max_sample, over, gain;
+	int i;
+
+	/* find maximum sample in frame */
+	max_sample = 0.0;
+	for (i = 0; i < n; i++)
+		if (in_out[i] > max_sample)
+			max_sample = in_out[i];
+
+	/* determine how far above set point */
+	over = max_sample / 30000.0;
+
+	/* If we are x dB over set point we reduce level by 2x dB, this
+	   attenuates major excursions in amplitude (likely to be caused
+	   by bit errors) more than smaller ones */
+	if (over > 1.0)
+	{
+		gain = 1.0 / (over * over);
+		for (i = 0; i < n; i++)
+			in_out[i] *= gain;
+	}
+}
+
 void analyse_one_frame(codec2_t *c2, model_t *model, const int16_t *speech)
 {
 	complex_t Sw[FFT_ENC];
@@ -741,6 +949,36 @@ void analyse_one_frame(codec2_t *c2, model_t *model, const int16_t *speech)
 	est_voicing_mbe(model, Sw, c2->W);
 }
 
+void synthesise_one_frame(codec2_t *c2, int16_t *speech, model_t *model,
+						  complex_t Aw[], float gain)
+{
+	int i;
+
+	/* LPC based phase synthesis */
+	complex_t H[MAX_AMP + 1];
+	sample_phase(model, H, Aw);
+	phase_synth_zero_order(c2, model, &c2->ex_phase, H);
+	postfilter(c2, model, &c2->bg_est);
+	synthesise(c2->fftr_inv_cfg, c2->Sn_, model, c2->Pn, 1);
+
+	for (i = 0; i < N_SAMP; i++)
+	{
+		c2->Sn_[i] *= gain;
+	}
+
+	ear_protection(c2->Sn_, N_SAMP);
+
+	for (i = 0; i < N_SAMP; i++)
+	{
+		if (c2->Sn_[i] > 32767.0f)
+			speech[i] = 32767;
+		else if (c2->Sn_[i] < -32767.0f)
+			speech[i] = -32767;
+		else
+			speech[i] = c2->Sn_[i];
+	}
+}
+
 void pack(
 	uint8_t *bitArray,		/* The output bit array. */
 	unsigned int *bitIndex, /* Index into the string in BITS, not bytes.*/
@@ -766,6 +1004,45 @@ void pack(
 	} while (fieldWidth != 0);
 }
 
+int unpack(
+	const uint8_t *bitArray, /* The input bit string. */
+	unsigned int *bitIndex,	 /* Index into the string in BITS, not bytes.*/
+	unsigned int fieldWidth	 /* Width of the field in BITS, not bytes. */
+)
+{
+	unsigned int field = 0;
+	unsigned int t;
+
+	do
+	{
+		unsigned int bI = *bitIndex;
+		unsigned int bitsLeft = 8 - (bI & 0x7);
+		unsigned int sliceWidth = bitsLeft < fieldWidth ? bitsLeft : fieldWidth;
+
+		field |= (((bitArray[bI >> 3] >> (bitsLeft - sliceWidth)) &
+				   ((1 << sliceWidth) - 1))
+				  << (fieldWidth - sliceWidth));
+
+		*bitIndex = bI + sliceWidth;
+		fieldWidth -= sliceWidth;
+	} while (fieldWidth != 0);
+
+	if (fieldWidth > 1)
+	{
+		/* Convert from Gray code to binary. Works for maximum 8-bit fields. */
+		t = field ^ (field >> 8);
+		t ^= (t >> 4);
+		t ^= (t >> 2);
+		t ^= (t >> 1);
+	}
+	else
+	{
+		t = field;
+	}
+
+	return t;
+}
+
 int encode_Wo(float Wo, uint8_t bits)
 {
 	int index, Wo_levels = 1 << bits;
@@ -779,6 +1056,18 @@ int encode_Wo(float Wo, uint8_t bits)
 		index = Wo_levels - 1;
 
 	return index;
+}
+
+float decode_Wo(int index, int bits)
+{
+	float step;
+	float Wo;
+	int Wo_levels = 1 << bits;
+
+	step = (W0_MAX - W0_MIN) / Wo_levels;
+	Wo = W0_MIN + step * (index);
+
+	return Wo;
 }
 
 void autocorrelate(float Sn[], /* frame of Nsam windowed speech samples */
@@ -827,10 +1116,11 @@ void levinson_durbin(float R[],	  /* order+1 autocorrelation coeff */
 	lpcs[0] = 1.0;
 }
 
-static float cheb_poly_eva(float *coef, float x)
 /*  float coef[]  	coefficients of the polynomial to be evaluated 	*/
 /*  float x   		the point where polynomial is to be evaluated 	*/
 /*  int order 		order of the polynomial 			*/
+static float cheb_poly_eva(float *coef, float x)
+
 {
 	int i;
 	float *t, *u, *v, sum;
@@ -979,6 +1269,251 @@ int lpc_to_lsp(float *a, float *freq, int nb)
 	return (roots);
 }
 
+/*  float *freq         array of LSP frequencies in radians     	*/
+/*  float *ak 		array of LPC coefficients 			*/
+void lsp_to_lpc(float *lsp, float *ak)
+{
+	int i, j;
+	float xout1, xout2, xin1, xin2;
+	float *pw, *n1, *n2, *n3, *n4 = 0;
+	float freq[LPC_ORD];
+	float Wp[(LPC_ORD * 4) + 2];
+
+	/* convert from radians to the x=cos(w) domain */
+	for (i = 0; i < LPC_ORD; i++)
+		freq[i] = cosf(lsp[i]);
+
+	pw = Wp;
+
+	/* initialise contents of array */
+	for (i = 0; i <= 4 * (LPC_ORD / 2) + 1; i++)
+	{ /* set contents of buffer to 0 */
+		*pw++ = 0.0;
+	}
+
+	/* Set pointers up */
+	pw = Wp;
+	xin1 = 1.0;
+	xin2 = 1.0;
+
+	/* reconstruct P(z) and Q(z) by cascading second order polynomials
+	  in form 1 - 2xz(-1) +z(-2), where x is the LSP coefficient */
+	for (j = 0; j <= LPC_ORD; j++)
+	{
+		for (i = 0; i < (LPC_ORD / 2); i++)
+		{
+			n1 = pw + (i * 4);
+			n2 = n1 + 1;
+			n3 = n2 + 1;
+			n4 = n3 + 1;
+			xout1 = xin1 - 2 * (freq[2 * i]) * *n1 + *n2;
+			xout2 = xin2 - 2 * (freq[2 * i + 1]) * *n3 + *n4;
+			*n2 = *n1;
+			*n4 = *n3;
+			*n1 = xin1;
+			*n3 = xin2;
+			xin1 = xout1;
+			xin2 = xout2;
+		}
+		xout1 = xin1 + *(n4 + 1);
+		xout2 = xin2 - *(n4 + 2);
+		ak[j] = (xout1 + xout2) * 0.5;
+		*(n4 + 1) = xin1;
+		*(n4 + 2) = xin2;
+
+		xin1 = 0.0;
+		xin2 = 0.0;
+	}
+}
+
+void lpc_post_filter(kiss_fftr_cfg fftr_fwd_cfg, float *Pw, float *ak,
+					 float beta, float gamma,
+					 int bass_boost, float E)
+{
+	int i;
+	float x[FFT_ENC];			   /* input to FFTs                */
+	complex_t Ww[FFT_ENC / 2 + 1]; /* weighting spectrum           */
+	float Rw[FFT_ENC / 2 + 1];	   /* R = WA                       */
+	float e_before, e_after, gain;
+	float Pfw;
+	float max_Rw, min_Rw;
+	float coeff;
+
+	/* Determine weighting filter spectrum W(exp(jw)) ---------------*/
+	for (i = 0; i < FFT_ENC; i++)
+	{
+		x[i] = 0.0;
+	}
+
+	x[0] = ak[0];
+	coeff = gamma;
+	for (i = 1; i <= LPC_ORD; i++)
+	{
+		x[i] = ak[i] * coeff;
+		coeff *= gamma;
+	}
+	kiss_fftr(fftr_fwd_cfg, x, Ww);
+
+	for (i = 0; i < FFT_ENC / 2; i++)
+	{
+		Ww[i].r = Ww[i].r * Ww[i].r + Ww[i].i * Ww[i].i;
+	}
+
+	/* Determined combined filter R = WA ---------------------------*/
+	max_Rw = 0.0;
+	min_Rw = 1E32;
+	for (i = 0; i < FFT_ENC / 2; i++)
+	{
+		Rw[i] = sqrtf(Ww[i].r * Pw[i]);
+		if (Rw[i] > max_Rw)
+			max_Rw = Rw[i];
+		if (Rw[i] < min_Rw)
+			min_Rw = Rw[i];
+	}
+
+	/* create post filter mag spectrum and apply ------------------*/
+	/* measure energy before post filtering */
+	e_before = 1E-4;
+	for (i = 0; i < FFT_ENC / 2; i++)
+		e_before += Pw[i];
+
+	/* apply post filter and measure energy  */
+	e_after = 1E-4;
+	for (i = 0; i < FFT_ENC / 2; i++)
+	{
+		Pfw = powf(Rw[i], beta);
+		Pw[i] *= Pfw * Pfw;
+		e_after += Pw[i];
+	}
+	gain = e_before / e_after;
+
+	/* apply gain factor to normalise energy, and LPC Energy */
+	gain *= E;
+	for (i = 0; i < FFT_ENC / 2; i++)
+	{
+		Pw[i] *= gain;
+	}
+
+	if (bass_boost)
+	{
+		/* add 3dB to first 1 kHz to account for LP effect of PF */
+
+		for (i = 0; i < FFT_ENC / 8; i++)
+		{
+			Pw[i] *= 1.4 * 1.4;
+		}
+	}
+}
+
+void aks_to_mag2(kiss_fftr_cfg fftr_fwd_cfg, float ak[], /* LPC's */
+				 model_t *model,						 /* sinusoidal model parameters for this frame */
+				 float E,								 /* energy term */
+				 float *snr,							 /* signal to noise ratio for this frame in dB */
+				 int sim_pf,							 /* true to simulate a post filter */
+				 int pf,								 /* true to enable actual LPC post filter */
+				 int bass_boost,						 /* enable LPC filter 0-1kHz 3dB boost */
+				 float beta, float gamma,				 /* LPC post filter parameters */
+				 complex_t Aw[]							 /* output power spectrum */
+)
+{
+	int i, m;	/* loop variables */
+	int am, bm; /* limits of current band */
+	float r;	/* no. rads/bin */
+	float Em;	/* energy in band */
+	float Am;	/* spectral amplitude sample */
+	float signal, noise;
+
+	r = M_PI / (FFT_ENC);
+
+	/* Determine DFT of A(exp(jw)) --------------------------------------------*/
+	{
+		float a[FFT_ENC]; /* input to FFT for power spectrum */
+
+		for (i = 0; i < FFT_ENC; i++)
+		{
+			a[i] = 0.0;
+		}
+
+		for (i = 0; i <= LPC_ORD; i++)
+			a[i] = ak[i];
+		kiss_fftr(fftr_fwd_cfg, a, Aw);
+	}
+
+	/* Determine power spectrum P(w) = E/(A(exp(jw))^2 ------------------------*/
+	float Pw[FFT_ENC / 2];
+
+	for (i = 0; i < FFT_ENC / 2; i++)
+	{
+		Pw[i] = 1.0 / (Aw[i].r * Aw[i].r + Aw[i].i * Aw[i].i + 1E-6);
+	}
+
+	if (pf)
+		lpc_post_filter(fftr_fwd_cfg, Pw, ak, beta, gamma, bass_boost, E);
+	else
+	{
+		for (i = 0; i < FFT_ENC / 2; i++)
+		{
+			Pw[i] *= E;
+		}
+	}
+
+	/* Determine magnitudes from P(w) ----------------------------------------*/
+	/* when used just by decoder {A} might be all zeroes so init signal
+	   and noise to prevent log(0) errors */
+	signal = 1E-30;
+	noise = 1E-32;
+
+	for (m = 1; m <= model->L; m++)
+	{
+		am = (int)((m - 0.5) * model->Wo / r + 0.5);
+		bm = (int)((m + 0.5) * model->Wo / r + 0.5);
+
+		// FIXME: With arm_rfft_fast_f32 we have to use this
+		// otherwise sometimes a to high bm is calculated
+		// which causes trouble later in the calculation
+		// chain
+		// it seems for some reason model->Wo is calculated somewhat too high
+		if (bm > FFT_ENC / 2)
+		{
+			bm = FFT_ENC / 2;
+		}
+		Em = 0.0;
+
+		for (i = am; i < bm; i++)
+			Em += Pw[i];
+		Am = sqrtf(Em);
+
+		signal += model->A[m] * model->A[m];
+		noise += (model->A[m] - Am) * (model->A[m] - Am);
+
+		/* This code significantly improves perf of LPC model, in
+		   particular when combined with phase0.  The LPC spectrum tends
+		   to track just under the peaks of the spectral envelope, and
+		   just above nulls.  This algorithm does the reverse to
+		   compensate - raising the amplitudes of spectral peaks, while
+		   attenuating the null.  This enhances the formants, and
+		   suppresses the energy between formants. */
+		if (sim_pf)
+		{
+			if (Am > model->A[m])
+				Am *= 0.7;
+			if (Am < model->A[m])
+				Am *= 1.4;
+		}
+		model->A[m] = Am;
+	}
+
+	*snr = 10.0 * log10f(signal / noise);
+}
+
+void apply_lpc_correction(model_t *model)
+{
+	if (model->Wo < (M_PI * 150.0f / 4000.0f))
+	{
+		model->A[1] *= 0.032f;
+	}
+}
+
 float speech_to_uq_lsps(float *lsp, float *ak, float *Sn, float *w)
 {
 	int i, roots;
@@ -1044,6 +1579,19 @@ int encode_energy(float e, int bits)
 		index = e_levels - 1;
 
 	return index;
+}
+
+float decode_energy(int index, int bits)
+{
+	float step;
+	float e;
+	int e_levels = 1 << bits;
+
+	step = (E_MAX_DB - E_MIN_DB) / e_levels;
+	e = E_MIN_DB + step * (index);
+	e = POW10F(e / 10.0f);
+
+	return e;
 }
 
 /* float   *cb;	current VQ codebook		*/
@@ -1122,6 +1670,73 @@ void encode_lspds_scalar(uint16_t *indexes, float *lsp)
 	}
 }
 
+void decode_lspds_scalar(float *lsp_, int *indexes)
+{
+	int i;
+	float lsp__hz[LPC_ORD];
+	float dlsp_[LPC_ORD];
+	const float *cb;
+
+	for (i = 0; i < LPC_ORD; i++)
+	{
+		cb = &delta_lsp_cb[i][0];
+		dlsp_[i] = cb[indexes[i]];
+
+		if (i)
+			lsp__hz[i] = lsp__hz[i - 1] + dlsp_[i];
+		else
+			lsp__hz[0] = dlsp_[0];
+
+		lsp_[i] = (M_PI / 4000.0f) * lsp__hz[i];
+	}
+}
+
+void interp_Wo(model_t *interp, /* interpolated model params */
+			   model_t *prev,	/* previous frames model params                  */
+			   model_t *next	/* next frames model params                      */
+)
+{
+	const float weight = 0.5f;
+
+	/* trap corner case where voicing est is probably wrong */
+	if (interp->voiced && !prev->voiced && !next->voiced)
+	{
+		interp->voiced = 0;
+	}
+
+	/* Wo depends on voicing of this and adjacent frames */
+	if (interp->voiced)
+	{
+		if (prev->voiced && next->voiced)
+			interp->Wo = (1.0 - weight) * prev->Wo + weight * next->Wo;
+		if (!prev->voiced && next->voiced)
+			interp->Wo = next->Wo;
+		if (prev->voiced && !next->voiced)
+			interp->Wo = prev->Wo;
+	}
+	else
+	{
+		interp->Wo = W0_MIN;
+	}
+
+	interp->L = M_PI / interp->Wo;
+}
+
+float interp_energy(float prev_e, float next_e)
+{
+	// return powf(10.0, (log10f(prev_e) + log10f(next_e))/2.0);
+	return sqrtf(prev_e * next_e);
+}
+
+void interpolate_lsp(float interp[], float prev[], float next[])
+{
+	const float weight = 0.5f;
+	int i;
+
+	for (i = 0; i < LPC_ORD; i++)
+		interp[i] = (1.0 - weight) * prev[i] + weight * next[i];
+}
+
 void codec2_encode(codec2_t *c2, uint8_t *bits, const int16_t *speech)
 {
 	model_t model;
@@ -1152,8 +1767,72 @@ void codec2_encode(codec2_t *c2, uint8_t *bits, const int16_t *speech)
 	encode_lspds_scalar(lspd_indexes, lsps);
 	for (i = 0; i < LSPD_SCALAR_INDEXES; i++)
 	{
-		pack(bits, &nbit, lspd_indexes[i], 5); // every codebook entry is 5 bits long
+		pack(bits, &nbit, lspd_indexes[i], 5); // codebook indices are 5 bits
 	}
+}
+
+void codec2_decode(codec2_t *c2, int16_t *speech, const uint8_t *bits)
+{
+	model_t model[2];
+	int lspd_indexes[LPC_ORD];
+	float lsps[2][LPC_ORD];
+	int Wo_index, e_index;
+	float e[2];
+	float snr;
+	float ak[2][LPC_ORD + 1];
+	int i, j;
+	unsigned int nbit = 0;
+	complex_t Aw[FFT_ENC];
+
+	/* only need to zero these out due to (unused) snr calculation */
+	for (i = 0; i < 2; i++)
+		for (j = 1; j <= MAX_AMP; j++)
+			model[i].A[j] = 0.0;
+
+	/* unpack bits from channel ------------------------------------*/
+
+	/* this will partially fill the model params for the 2 x 10ms
+	   frames */
+	model[0].voiced = unpack(bits, &nbit, 1);
+	model[1].voiced = unpack(bits, &nbit, 1);
+
+	Wo_index = unpack(bits, &nbit, WO_BITS);
+	model[1].Wo = decode_Wo(Wo_index, WO_BITS);
+	model[1].L = M_PI / model[1].Wo;
+
+	e_index = unpack(bits, &nbit, E_BITS);
+	e[1] = decode_energy(e_index, E_BITS);
+
+	for (i = 0; i < LSPD_SCALAR_INDEXES; i++)
+	{
+		lspd_indexes[i] = unpack(bits, &nbit, 5); // codebook indices are 5 bits
+	}
+	decode_lspds_scalar(&lsps[1][0], lspd_indexes);
+
+	/* interpolate ------------------------------------------------*/
+	/* Wo and energy are sampled every 20ms, so we interpolate just 1
+	   10ms frame between 20ms samples */
+	interp_Wo(&model[0], &c2->prev_model_dec, &model[1]);
+	e[0] = interp_energy(c2->prev_e_dec, e[1]);
+
+	/* LSPs are sampled every 20ms so we interpolate the frame in
+	   between, then recover spectral amplitudes */
+	interpolate_lsp(&lsps[0][0], c2->prev_lsps_dec, &lsps[1][0]);
+
+	for (i = 0; i < 2; i++)
+	{
+		lsp_to_lpc(&lsps[i][0], &ak[i][0]);
+		aks_to_mag2(c2->fftr_fwd_cfg, &ak[i][0], &model[i], e[i], &snr, 0,
+					c2->lpc_pf, c2->bass_boost, c2->beta, c2->gamma, Aw);
+		apply_lpc_correction(&model[i]);
+		synthesise_one_frame(c2, &speech[N_SAMP * i], &model[i], Aw, 1.0f);
+	}
+
+	/* update memories for next frame ----------------------------*/
+	c2->prev_model_dec = model[1];
+	c2->prev_e_dec = e[1];
+	for (i = 0; i < LPC_ORD; i++)
+		c2->prev_lsps_dec[i] = lsps[1][i];
 }
 
 int main(void)
@@ -1163,6 +1842,20 @@ int main(void)
 
 	uint8_t encoded[8] = {0};
 	int16_t speech[160];
+
+	/*FILE *audio, *bitstream;
+
+	audio = fopen("../../sample.raw", "rb");
+	bitstream = fopen("../../sample.bin", "wb");
+
+	while (fread(speech, 160*sizeof(int16_t), 1, audio)==1)
+	{
+		codec2_encode(&c2, encoded, speech);
+		fwrite(encoded, sizeof(encoded), 1, bitstream);
+	}
+
+	fclose(audio);
+	fclose(bitstream);*/
 
 	for (uint8_t i = 0; i < 160; i++)
 		speech[i] = 0.5f * sinf(i / 80.0f * 2.0f * M_PI);
