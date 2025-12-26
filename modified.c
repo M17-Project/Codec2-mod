@@ -291,6 +291,8 @@ void codec2_init(codec2_t *c2)
 	c2->prev_model_dec.Wo = 2.0f * M_PI / P_MAX;
 	c2->prev_model_dec.L = M_PI / c2->prev_model_dec.Wo;
 	c2->prev_model_dec.voiced = 0;
+	memset(c2->prev_model_dec.phi, 0, sizeof(c2->prev_model_dec.phi));
+	c2->ex_phase = 0.0f;
 
 	for (i = 0; i < LPC_ORD; i++)
 	{
@@ -735,7 +737,7 @@ void sample_phase(model_t *model, complex_t *H,
 	int m, b;
 	float r;
 
-	r = 2.0f * M_PI / (FFT_ENC);
+	r = 2.0f * M_PI / FFT_ENC;
 
 	/* Sample phase at harmonics */
 	for (m = 1; m <= model->L; m++)
@@ -950,12 +952,13 @@ void analyse_one_frame(codec2_t *c2, model_t *model, const int16_t *speech)
 }
 
 void synthesise_one_frame(codec2_t *c2, int16_t *speech, model_t *model,
-						  complex_t Aw[], float gain)
+						  complex_t *Aw, float gain)
 {
 	int i;
 
 	/* LPC based phase synthesis */
 	complex_t H[MAX_AMP + 1];
+	//memset(model->phi, 0, sizeof(model->phi));
 	sample_phase(model, H, Aw);
 	phase_synth_zero_order(c2, model, &c2->ex_phase, H);
 	postfilter(c2, model, &c2->bg_est);
@@ -1011,6 +1014,7 @@ int unpack(
 )
 {
 	unsigned int field = 0;
+	unsigned int origWidth = fieldWidth;
 	unsigned int t;
 
 	do
@@ -1027,7 +1031,7 @@ int unpack(
 		fieldWidth -= sliceWidth;
 	} while (fieldWidth != 0);
 
-	if (fieldWidth > 1)
+	if (origWidth > 1)
 	{
 		/* Convert from Gray code to binary. Works for maximum 8-bit fields. */
 		t = field ^ (field >> 8);
@@ -1070,8 +1074,8 @@ float decode_Wo(int index, int bits)
 	return Wo;
 }
 
-void autocorrelate(float Sn[], /* frame of Nsam windowed speech samples */
-				   float Rn[]  /* array of P+1 autocorrelation coefficients */
+void autocorrelate(float *Sn, /* frame of Nsam windowed speech samples */
+				   float *Rn  /* array of P+1 autocorrelation coefficients */
 )
 {
 	int i, j; /* loop variables */
@@ -1084,8 +1088,8 @@ void autocorrelate(float Sn[], /* frame of Nsam windowed speech samples */
 	}
 }
 
-void levinson_durbin(float R[],	  /* order+1 autocorrelation coeff */
-					 float lpcs[] /* order+1 LPC's */
+void levinson_durbin(float *R,	 /* order+1 autocorrelation coeff */
+					 float *lpcs /* order+1 LPC's */
 )
 {
 	float a[LPC_ORD + 1][LPC_ORD + 1];
@@ -1405,15 +1409,17 @@ void lpc_post_filter(kiss_fftr_cfg fftr_fwd_cfg, float *Pw, float *ak,
 	}
 }
 
-void aks_to_mag2(kiss_fftr_cfg fftr_fwd_cfg, float ak[], /* LPC's */
-				 model_t *model,						 /* sinusoidal model parameters for this frame */
-				 float E,								 /* energy term */
-				 float *snr,							 /* signal to noise ratio for this frame in dB */
-				 int sim_pf,							 /* true to simulate a post filter */
-				 int pf,								 /* true to enable actual LPC post filter */
-				 int bass_boost,						 /* enable LPC filter 0-1kHz 3dB boost */
-				 float beta, float gamma,				 /* LPC post filter parameters */
-				 complex_t Aw[]							 /* output power spectrum */
+void aks_to_mag2(kiss_fftr_cfg fftr_fwd_cfg,
+				 float *ak,		 /* LPC's */
+				 model_t *model, /* sinusoidal model parameters for this frame */
+				 float E,		 /* energy term */
+				 float *snr,	 /* signal to noise ratio for this frame in dB */
+				 int sim_pf,	 /* true to simulate a post filter */
+				 int pf,		 /* true to enable actual LPC post filter */
+				 int bass_boost, /* enable LPC filter 0-1kHz 3dB boost */
+				 float beta,	 /* LPC post filter parameters */
+				 float gamma,	 /* LPC post filter parameters */
+				 complex_t *Aw	 /* output power spectrum */
 )
 {
 	int i, m;	/* loop variables */
@@ -1423,7 +1429,7 @@ void aks_to_mag2(kiss_fftr_cfg fftr_fwd_cfg, float ak[], /* LPC's */
 	float Am;	/* spectral amplitude sample */
 	float signal, noise;
 
-	r = M_PI / (FFT_ENC);
+	r = 2.0f * M_PI / FFT_ENC;
 
 	/* Determine DFT of A(exp(jw)) --------------------------------------------*/
 	{
@@ -1728,7 +1734,7 @@ float interp_energy(float prev_e, float next_e)
 	return sqrtf(prev_e * next_e);
 }
 
-void interpolate_lsp(float interp[], float prev[], float next[])
+void interpolate_lsp(float *interp, float *prev, float *next)
 {
 	const float weight = 0.5f;
 	int i;
@@ -1840,24 +1846,36 @@ int main(void)
 	codec2_t c2;
 	codec2_init(&c2);
 
-	uint8_t encoded[8] = {0};
+	uint8_t encoded[8];
 	int16_t speech[160];
 
-	/*FILE *audio, *bitstream;
+	FILE *audio_in, *bitstream, *audio_out;
 
-	audio = fopen("../../sample.raw", "rb");
+	audio_in = fopen("../../sample.raw", "rb");
 	bitstream = fopen("../../sample.bin", "wb");
+	audio_out = fopen("../../decoded.raw", "wb");
 
-	while (fread(speech, 160*sizeof(int16_t), 1, audio)==1)
+	while (fread(speech, sizeof(speech), 1, audio_in) == 1)
 	{
 		codec2_encode(&c2, encoded, speech);
 		fwrite(encoded, sizeof(encoded), 1, bitstream);
 	}
 
-	fclose(audio);
-	fclose(bitstream);*/
+	fclose(bitstream);
+	bitstream = fopen("../../sample.bin", "rb");
+	codec2_init(&c2);
 
-	for (uint8_t i = 0; i < 160; i++)
+	while (fread(encoded, 8, 1, bitstream) == 1)
+	{
+		codec2_decode(&c2, speech, encoded);
+		fwrite(speech, sizeof(speech), 1, audio_out);
+	}
+
+	fclose(audio_in);
+	fclose(bitstream);
+	fclose(audio_out);
+
+	/*for (uint8_t i = 0; i < 160; i++)
 		speech[i] = 0.5f * sinf(i / 80.0f * 2.0f * M_PI);
 
 	for (uint8_t j = 0; j < 10; j++)
@@ -1867,7 +1885,7 @@ int main(void)
 		for (uint8_t i = 0; i < 8; i++)
 			fprintf(stderr, "%02X ", encoded[i]);
 		fprintf(stderr, "\n");
-	}
+	}*/
 
 	return 0;
 }
