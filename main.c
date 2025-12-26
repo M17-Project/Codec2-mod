@@ -1042,6 +1042,41 @@ int encode_energy(float e, int bits)
 	return index;
 }
 
+/* float   *cb;	current VQ codebook		*/
+/* float   *vec;	vector to quantise		*/
+/* float   *w;         weighting vector                */
+/* float   *se;		accumulated squared error 	*/
+long quantise(const float *cb, float *vec, float *w, float *se)
+{
+	float e;	 /* current error		*/
+	long besti;	 /* best index so far		*/
+	float beste; /* best error so far		*/
+	long j;
+	int i;
+	float diff;
+
+	besti = 0;
+	beste = 1E32;
+	for (j = 0; j < 32; j++)
+	{
+		e = 0.0;
+		for (i = 0; i < 1; i++)
+		{
+			diff = cb[j * 1 + i] - vec[i];
+			e += diff * w[i] * diff * w[i]; // powf(diff*w[i],2.0);
+		}
+		if (e < beste)
+		{
+			beste = e;
+			besti = j;
+		}
+	}
+
+	*se += beste;
+
+	return (besti);
+}
+
 void encode_lspds_scalar(uint16_t *indexes, float *lsp)
 {
 	int i;
@@ -1073,7 +1108,7 @@ void encode_lspds_scalar(uint16_t *indexes, float *lsp)
 			dlsp[0] = lsp_hz[0];
 
 		cb = &delta_lsp_cb[i][0];
-		indexes[i] = quantise(cb, &dlsp[i], wt, 1, 32, &se);
+		indexes[i] = quantise(cb, &dlsp[i], wt, &se);
 		dlsp_[i] = cb[indexes[i]];
 
 		if (i)
@@ -1083,7 +1118,7 @@ void encode_lspds_scalar(uint16_t *indexes, float *lsp)
 	}
 }
 
-void codec2_encode_3200(codec2_t *c2, uint8_t *bits, const int16_t *speech)
+void codec2_encode(codec2_t *c2, uint8_t *bits, const int16_t *speech)
 {
 	model_t model;
 	float ak[LPC_ORD + 1];
@@ -1113,7 +1148,7 @@ void codec2_encode_3200(codec2_t *c2, uint8_t *bits, const int16_t *speech)
 	encode_lspds_scalar(lspd_indexes, lsps);
 	for (i = 0; i < LSPD_SCALAR_INDEXES; i++)
 	{
-		pack(bits, &nbit, lspd_indexes[i], lspd_bits(i));
+		pack(bits, &nbit, lspd_indexes[i], 5); // every codebook entry is 5 bits long
 	}
 }
 
@@ -1121,6 +1156,21 @@ int main(void)
 {
 	codec2_t c2;
 	codec2_init(&c2);
+
+	uint8_t encoded[8] = {0};
+	int16_t speech[160];
+
+	for (uint8_t i = 0; i < 160; i++)
+		speech[i] = 0.5f * sinf(i / 80.0f * 2.0f * M_PI);
+
+	for (uint8_t j = 0; j < 10; j++)
+	{
+		codec2_encode(&c2, encoded, speech);
+
+		for (uint8_t i = 0; i < 8; i++)
+			fprintf(stderr, "%02X ", encoded[i]);
+		fprintf(stderr, "\n");
+	}
 
 	return 0;
 }
