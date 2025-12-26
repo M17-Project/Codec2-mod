@@ -65,6 +65,8 @@
 #define LPCPF_GAMMA 0.5
 #define LPCPF_BETA 0.2
 
+#define LSP_DELTA1 0.01 /* grid spacing for LSP root searches */
+
 /* bandpass filter taps? */
 #define BPF_N 101
 
@@ -82,6 +84,8 @@ const float nlp_fir[NLP_NTAP] = {
 	-4.8204610e-03, 8.0284511e-04, 4.3036754e-03, 5.5924666e-03,
 	5.1449415e-03, 3.7058509e-03, 2.0029849e-03, 5.5034190e-04,
 	-4.2289438e-04, -9.2768838e-04, -1.1008344e-03, -1.0818124e-03};
+
+extern const float delta_lsp_cb[10][32];
 
 typedef kiss_fft_cpx complex_t;
 
@@ -733,6 +737,352 @@ void analyse_one_frame(codec2_t *c2, model_t *model, const int16_t *speech)
 	est_voicing_mbe(model, Sw, c2->W);
 }
 
+void pack(
+	uint8_t *bitArray,		/* The output bit array. */
+	unsigned int *bitIndex, /* Index into the string in BITS, not bytes.*/
+	unsigned int field,		/* The bit field to be packed. */
+	unsigned int fieldWidth /* Width of the field in BITS, not bytes. */
+)
+{
+	/* Convert the field to Gray code, but only if the field is more than 1 bit */
+	if (fieldWidth > 1)
+		field = (field >> 1) ^ field;
+
+	do
+	{
+		unsigned int bI = *bitIndex;
+		unsigned int bitsLeft = 8 - (bI & 0x7);
+		unsigned int sliceWidth = bitsLeft < fieldWidth ? bitsLeft : fieldWidth;
+		unsigned int wordIndex = bI >> 3;
+
+		bitArray[wordIndex] |= ((uint8_t)((field >> (fieldWidth - sliceWidth)) << (bitsLeft - sliceWidth)));
+
+		*bitIndex = bI + sliceWidth;
+		fieldWidth -= sliceWidth;
+	} while (fieldWidth != 0);
+}
+
+int encode_Wo(float Wo, uint8_t bits)
+{
+	int index, Wo_levels = 1 << bits;
+	float norm;
+
+	norm = (Wo - W0_MIN) / (W0_MAX - W0_MIN);
+	index = floorf(Wo_levels * norm + 0.5);
+	if (index < 0)
+		index = 0;
+	if (index > (Wo_levels - 1))
+		index = Wo_levels - 1;
+
+	return index;
+}
+
+void autocorrelate(float Sn[], /* frame of Nsam windowed speech samples */
+				   float Rn[]  /* array of P+1 autocorrelation coefficients */
+)
+{
+	int i, j; /* loop variables */
+
+	for (j = 0; j < LPC_ORD + 1; j++)
+	{
+		Rn[j] = 0.0;
+		for (i = 0; i < M_PITCH - j; i++)
+			Rn[j] += Sn[i] * Sn[i + j];
+	}
+}
+
+void levinson_durbin(float R[],	  /* order+1 autocorrelation coeff */
+					 float lpcs[] /* order+1 LPC's */
+)
+{
+	float a[LPC_ORD + 1][LPC_ORD + 1];
+	float sum, e, k;
+	int i, j; /* loop variables */
+
+	e = R[0]; /* Equation 38a, Makhoul */
+
+	for (i = 1; i <= LPC_ORD; i++)
+	{
+		sum = 0.0;
+		for (j = 1; j <= i - 1; j++)
+			sum += a[i - 1][j] * R[i - j];
+		k = -1.0 * (R[i] + sum) / e; /* Equation 38b, Makhoul */
+		if (fabsf(k) > 1.0)
+			k = 0.0;
+
+		a[i][i] = k;
+
+		for (j = 1; j <= i - 1; j++)
+			a[i][j] = a[i - 1][j] + k * a[i - 1][i - j]; /* Equation 38c, Makhoul */
+
+		e *= (1 - k * k); /* Equation 38d, Makhoul */
+	}
+
+	for (i = 1; i <= LPC_ORD; i++)
+		lpcs[i] = a[LPC_ORD][i];
+	lpcs[0] = 1.0;
+}
+
+static float cheb_poly_eva(float *coef, float x)
+/*  float coef[]  	coefficients of the polynomial to be evaluated 	*/
+/*  float x   		the point where polynomial is to be evaluated 	*/
+/*  int order 		order of the polynomial 			*/
+{
+	int i;
+	float *t, *u, *v, sum;
+	float Tm[(LPC_ORD / 2) + 1];
+
+	/* Initialise pointers */
+
+	t = Tm; /* T[i-2] 			*/
+	*t++ = 1.0;
+	u = t--; /* T[i-1] 			*/
+	*u++ = x;
+	v = u--; /* T[i] 			*/
+
+	/* Evaluate chebyshev series formulation using iterative approach 	*/
+
+	for (i = 2; i <= LPC_ORD / 2; i++)
+		*v++ = (2 * x) * (*u++) - *t++; /* T[i] = 2*x*T[i-1] - T[i-2]	*/
+
+	sum = 0.0; /* initialise sum to zero 	*/
+	t = Tm;	   /* reset pointer 		*/
+
+	/* Evaluate polynomial and return value also free memory space */
+
+	for (i = 0; i <= LPC_ORD / 2; i++)
+		sum += coef[(LPC_ORD / 2) - i] * *t++;
+
+	return sum;
+}
+
+/*  float *a 		     	lpc coefficients			*/
+/*  float *freq 	      	LSP frequencies in radians      	*/
+/*  int nb			number of sub-intervals (4) 		*/
+int lpc_to_lsp(float *a, float *freq, int nb)
+{
+	float psuml, psumr, psumm, temp_xr, xl, xr, xm = 0;
+	float temp_psumr;
+	int i, j, m, flag, k;
+	float *px; /* ptrs of respective P'(z) & Q'(z)	*/
+	float *qx;
+	float *p;
+	float *q;
+	float *pt;	   /* ptr used for cheb_poly_eval()
+					  whether P' or Q' 			*/
+	int roots = 0; /* number of roots found 	        */
+	float Q[LPC_ORD + 1];
+	float P[LPC_ORD + 1];
+
+	flag = 1;
+	m = LPC_ORD / 2; /* order of P'(z) & Q'(z) polynimials 	*/
+
+	/* Allocate memory space for polynomials */
+	/* determine P'(z)'s and Q'(z)'s coefficients where
+	  P'(z) = P(z)/(1 + z^(-1)) and Q'(z) = Q(z)/(1-z^(-1)) */
+	px = P; /* initilaise ptrs */
+	qx = Q;
+	p = px;
+	q = qx;
+	*px++ = 1.0;
+	*qx++ = 1.0;
+	for (i = 1; i <= m; i++)
+	{
+		*px++ = a[i] + a[LPC_ORD + 1 - i] - *p++;
+		*qx++ = a[i] - a[LPC_ORD + 1 - i] + *q++;
+	}
+	px = P;
+	qx = Q;
+	for (i = 0; i < m; i++)
+	{
+		*px = 2 * *px;
+		*qx = 2 * *qx;
+		px++;
+		qx++;
+	}
+	px = P; /* re-initialise ptrs 			*/
+	qx = Q;
+
+	/* Search for a zero in P'(z) polynomial first and then alternate to Q'(z).
+	Keep alternating between the two polynomials as each zero is found 	*/
+	xr = 0;	  /* initialise xr to zero 		*/
+	xl = 1.0; /* start at point xl = 1 		*/
+
+	for (j = 0; j < LPC_ORD; j++)
+	{
+		if (j % 2) /* determines whether P' or Q' is eval. */
+			pt = qx;
+		else
+			pt = px;
+
+		psuml = cheb_poly_eva(pt, xl); /* evals poly. at xl 	*/
+		flag = 1;
+		while (flag && (xr >= -1.0))
+		{
+			xr = xl - LSP_DELTA1;		   /* interval spacing 	*/
+			psumr = cheb_poly_eva(pt, xr); /* poly(xl-delta_x) 	*/
+			temp_psumr = psumr;
+			temp_xr = xr;
+
+			/* if no sign change increment xr and re-evaluate
+			   poly(xr). Repeat til sign change.  if a sign change has
+			   occurred the interval is bisected and then checked again
+			   for a sign change which determines in which interval the
+			   zero lies in.  If there is no sign change between poly(xm)
+			   and poly(xl) set interval between xm and xr else set
+			   interval between xl and xr and repeat till root is located
+			   within the specified limits  */
+			if (((psumr * psuml) < 0.0) || (psumr == 0.0))
+			{
+				roots++;
+
+				psumm = psuml;
+				for (k = 0; k <= nb; k++)
+				{
+					xm = (xl + xr) / 2; /* bisect the interval 	*/
+					psumm = cheb_poly_eva(pt, xm);
+					if (psumm * psuml > 0.)
+					{
+						psuml = psumm;
+						xl = xm;
+					}
+					else
+					{
+						psumr = psumm;
+						xr = xm;
+					}
+				}
+
+				/* once zero is found, reset initial interval to xr 	*/
+				freq[j] = (xm);
+				xl = xm;
+				flag = 0; /* reset flag for next search 	*/
+			}
+			else
+			{
+				psuml = temp_psumr;
+				xl = temp_xr;
+			}
+		}
+	}
+
+	/* convert from x domain to radians */
+	for (i = 0; i < LPC_ORD; i++)
+	{
+		freq[i] = acosf(freq[i]);
+	}
+
+	return (roots);
+}
+
+float speech_to_uq_lsps(float *lsp, float *ak, float *Sn, float *w)
+{
+	int i, roots;
+	float Wn[M_PITCH];
+	float R[LPC_ORD + 1];
+	float e, E;
+
+	e = 0.0;
+	for (i = 0; i < M_PITCH; i++)
+	{
+		Wn[i] = Sn[i] * w[i];
+		e += Wn[i] * Wn[i];
+	}
+
+	/* trap 0 energy case as LPC analysis will fail */
+
+	if (e == 0.0)
+	{
+		for (i = 0; i < LPC_ORD; i++)
+			lsp[i] = (M_PI / LPC_ORD) * (float)i;
+		return 0.0;
+	}
+
+	autocorrelate(Wn, R);
+	levinson_durbin(R, ak);
+
+	E = 0.0;
+	for (i = 0; i <= LPC_ORD; i++)
+		E += ak[i] * R[i];
+
+	/* 15 Hz BW expansion as I can't hear the difference and it may help
+	   help occasional fails in the LSP root finding.  Important to do this
+	   after energy calculation to avoid -ve energy values.
+	*/
+
+	for (i = 0; i <= LPC_ORD; i++)
+		ak[i] *= powf(0.994, (float)i);
+
+	roots = lpc_to_lsp(ak, lsp, 5);
+	if (roots != LPC_ORD)
+	{
+		/* if root finding fails use some benign LSP values instead */
+		for (i = 0; i < LPC_ORD; i++)
+			lsp[i] = (M_PI / LPC_ORD) * (float)i;
+	}
+
+	return E;
+}
+
+int encode_energy(float e, int bits)
+{
+	int index, e_levels = 1 << bits;
+	float e_min = E_MIN_DB;
+	float e_max = E_MAX_DB;
+	float norm;
+
+	e = 10.0 * log10f(e);
+	norm = (e - e_min) / (e_max - e_min);
+	index = floorf(e_levels * norm + 0.5);
+	if (index < 0)
+		index = 0;
+	if (index > (e_levels - 1))
+		index = e_levels - 1;
+
+	return index;
+}
+
+void encode_lspds_scalar(uint16_t *indexes, float *lsp)
+{
+	int i;
+	float lsp_hz[LPC_ORD];
+	float lsp__hz[LPC_ORD];
+	float dlsp[LPC_ORD];
+	float dlsp_[LPC_ORD];
+	float wt[LPC_ORD];
+	const float *cb;
+	float se;
+
+	for (i = 0; i < LPC_ORD; i++)
+	{
+		wt[i] = 1.0;
+	}
+
+	/* convert from radians to Hz so we can use human readable
+	   frequencies */
+	for (i = 0; i < LPC_ORD; i++)
+		lsp_hz[i] = (4000.0 / M_PI) * lsp[i];
+
+	wt[0] = 1.0;
+	for (i = 0; i < LPC_ORD; i++)
+	{
+		/* find difference from previous quantised lsp */
+		if (i)
+			dlsp[i] = lsp_hz[i] - lsp__hz[i - 1];
+		else
+			dlsp[0] = lsp_hz[0];
+
+		cb = &delta_lsp_cb[i][0];
+		indexes[i] = quantise(cb, &dlsp[i], wt, 1, 32, &se);
+		dlsp_[i] = cb[indexes[i]];
+
+		if (i)
+			lsp__hz[i] = lsp__hz[i - 1] + dlsp_[i];
+		else
+			lsp__hz[0] = dlsp_[0];
+	}
+}
+
 void codec2_encode_3200(codec2_t *c2, uint8_t *bits, const int16_t *speech)
 {
 	model_t model;
@@ -740,7 +1090,7 @@ void codec2_encode_3200(codec2_t *c2, uint8_t *bits, const int16_t *speech)
 	float lsps[LPC_ORD];
 	float e;
 	int Wo_index, e_index;
-	int lspd_indexes[LPC_ORD];
+	uint16_t lspd_indexes[LPC_ORD];
 	int i;
 	unsigned int nbit = 0;
 
@@ -756,11 +1106,11 @@ void codec2_encode_3200(codec2_t *c2, uint8_t *bits, const int16_t *speech)
 	Wo_index = encode_Wo(model.Wo, WO_BITS);
 	pack(bits, &nbit, Wo_index, WO_BITS);
 
-	e = speech_to_uq_lsps(lsps, ak, c2->Sn, c2->w, M_PITCH, LPC_ORD);
+	e = speech_to_uq_lsps(lsps, ak, c2->Sn, c2->w);
 	e_index = encode_energy(e, E_BITS);
 	pack(bits, &nbit, e_index, E_BITS);
 
-	encode_lspds_scalar(lspd_indexes, lsps, LPC_ORD);
+	encode_lspds_scalar(lspd_indexes, lsps);
 	for (i = 0; i < LSPD_SCALAR_INDEXES; i++)
 	{
 		pack(bits, &nbit, lspd_indexes[i], lspd_bits(i));
