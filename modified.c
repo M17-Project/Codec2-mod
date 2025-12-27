@@ -21,7 +21,6 @@
 #endif
 
 #define N_S 0.01   /* internal proc frame length in secs   */
-#define TW_S 0.005 /* trapezoidal synth window overlap     */
 #define MAX_AMP 80 /* maximum number of harmonics          */
 
 #define FFT_ENC 512	 /* size of FFT used for encoder         */
@@ -30,9 +29,7 @@
 #define LPC_ORD 10	 /* LPC order                            */
 
 /* Pitch estimation defines */
-#define M_PITCH_S 0.0400f /* pitch analysis window in s           */
-#define P_MIN_S 0.0025f	  /* minimum pitch period in s            */
-#define P_MAX_S 0.0200f	  /* maximum pitch period in s            */
+#define P_MAX_S 0.0200f /* maximum pitch period in s            */
 
 #define SAMP_RATE 8000 /* sample rate of this instance             */
 #define N_SAMP 80	   /* number of samples per 10ms frame at Fs   */
@@ -49,26 +46,21 @@
 #define COEFF 0.95		/* notch filter parameter               */
 #define PE_FFT_SIZE 512 /* DFT size for pitch estimation        */
 #define DEC 5			/* decimation factor                    */
-#define T 0.1			/* threshold for local minima candidate */
-#define F0_MAX 500
+#define NDEC (M_PITCH / DEC)
+#define T 0.1		/* threshold for local minima candidate */
 #define CNLP 0.3	/* post processor constant              */
 #define NLP_NTAP 48 /* Decimation LPF order */
 
 /* quantizers & LPC */
 #define WO_BITS 7
 #define WO_LEVELS (1 << WO_BITS)
-#define WO_DT_BITS 3
 
 #define E_BITS 5
 #define E_LEVELS (1 << E_BITS)
 #define E_MIN_DB -10.0
 #define E_MAX_DB 40.0
 
-#define LSP_SCALAR_INDEXES 10
 #define LSPD_SCALAR_INDEXES 10
-#define LSP_PRED_VQ_INDEXES 3
-
-#define WO_E_BITS 8
 
 #define LPCPF_GAMMA 0.5
 #define LPCPF_BETA 0.2
@@ -100,6 +92,20 @@ const float nlp_fir[NLP_NTAP] = {
 	5.1449415e-03, 3.7058509e-03, 2.0029849e-03, 5.5034190e-04,
 	-4.2289438e-04, -9.2768838e-04, -1.1008344e-03, -1.0818124e-03};
 
+/* ~15Hz bandwidth expansion */
+const float bw_gamma[LPC_ORD + 1] = {
+	1.000000000000000,
+	0.994000000000000,
+	0.988036000000000,
+	0.982107784000000,
+	0.976215137296000,
+	0.970357846472224,
+	0.964535699393391,
+	0.958748485197030,
+	0.952995994285848,
+	0.947278018320133,
+	0.941594350210212};
+
 extern const float delta_lsp_cb[10][32];
 
 typedef kiss_fft_cpx complex_t;
@@ -115,13 +121,12 @@ typedef struct model_t
 
 typedef struct nlp_t
 {
-	int m;
-	float w[PMAX_M / DEC];	 /* DFT window                   */
-	float sq[PMAX_M];		 /* squared speech samples       */
-	float mem_x, mem_y;		 /* memory for notch filter      */
-	float mem_fir[NLP_NTAP]; /* decimation FIR filter memory */
-	kiss_fft_cfg fft_cfg;	 /* kiss FFT config              */
-	float *Sn16k;			 /* Fs=16kHz input speech vector */
+	float w[PMAX_M / DEC];		 /* DFT window                   */
+	float sq[PMAX_M];			 /* squared speech samples       */
+	float mem_x, mem_y;			 /* memory for notch filter      */
+	float mem_fir[NLP_NTAP * 2]; /* decimation FIR filter memory */
+	int mem_pos;
+	kiss_fft_cfg fft_cfg; /* kiss FFT config              */
 } nlp_t;
 
 typedef struct codec2_t
@@ -151,21 +156,8 @@ typedef struct codec2_t
 	float beta;		/* LPC post filter parameters                */
 	float gamma;
 
-	float xq_enc[2]; /* joint pitch and energy VQ states          */
-	float xq_dec[2];
-
-	/* newamp1 states */
-	// float rate_K_sample_freqs_kHz[NEWAMP1_K];
-	// float prev_rate_K_vec_[NEWAMP1_K];
-	float Wo_left;
-	int voicing_left;
 	kiss_fft_cfg phase_fft_fwd_cfg;
 	kiss_fft_cfg phase_fft_inv_cfg;
-	float se; /* running sum of squared error */
-	int nse;  /* number of terms in sum       */
-
-	bool post_filter_en;
-	bool eq_en;
 } codec2_t;
 
 void make_analysis_window(kiss_fft_cfg fft_fwd_cfg, float *w, float *W)
@@ -236,23 +228,20 @@ void make_synthesis_window(float *Pn)
 
 void nlp_init(nlp_t *nlp)
 {
-	int i;
-	int m = M_PITCH;
+	nlp->mem_pos = 0;
 
-	nlp->m = m;
-
-	for (i = 0; i < m / DEC; i++)
+	for (int i = 0; i < NDEC; i++)
 	{
-		nlp->w[i] = 0.5 - 0.5 * cosf(2.0f * M_PI * i / (m / DEC - 1));
+		nlp->w[i] = 0.5 - 0.5 * cosf(2.0f * M_PI * i / (NDEC - 1));
 	}
 
-	for (i = 0; i < PMAX_M; i++)
+	for (int i = 0; i < PMAX_M; i++)
 		nlp->sq[i] = 0.0;
 
 	nlp->mem_x = 0.0;
 	nlp->mem_y = 0.0;
 
-	for (i = 0; i < NLP_NTAP; i++)
+	for (int i = 0; i < NLP_NTAP; i++)
 		nlp->mem_fir[i] = 0.0;
 
 	nlp->fft_cfg = kiss_fft_alloc(PE_FFT_SIZE, 0, NULL, NULL);
@@ -303,13 +292,6 @@ void codec2_init(codec2_t *c2)
 	c2->bass_boost = 1;
 	c2->beta = LPCPF_BETA;
 	c2->gamma = LPCPF_GAMMA;
-
-	c2->xq_enc[0] = c2->xq_enc[1] = 0.0;
-	c2->xq_dec[0] = c2->xq_dec[1] = 0.0;
-
-	c2->se = 0.0;
-	c2->nse = 0;
-	c2->post_filter_en = true;
 
 	for (i = 0; i < BPF_N + 4 * N_SAMP; i++)
 		c2->bpf_buf[i] = 0.0;
@@ -624,11 +606,11 @@ float est_voicing_mbe(model_t *model, complex_t *Sw, float *W)
 }
 
 float nlp(
-	nlp_t *nlp,
-	float *Sn,	   /* input speech vector */
-	int n,		   /* frames shift (no. new samples in Sn[])             */
-	float *pitch,  /* estimated pitch period in samples at current Fs    */
-	float *prev_f0 /* previous pitch f0 in Hz, memory for pitch tracking */
+	nlp_t *restrict nlp,
+	float *restrict Sn,		/* input speech vector */
+	int n,					/* frames shift (no. new samples in Sn[])             */
+	float *restrict pitch,	/* estimated pitch period in samples at current Fs    */
+	float *restrict prev_f0 /* previous pitch f0 in Hz, memory for pitch tracking */
 )
 {
 	float notch;			   /* current notch filter output          */
@@ -636,11 +618,9 @@ float nlp(
 	float gmax;
 	int gmax_bin;
 	float best_f0;
-
-	int m = nlp->m;
+	static const int m = M_PITCH;
 
 	/* Square, notch filter at DC, and LP filter vector */
-
 	/* Square latest input samples */
 	for (int i = m - n; i < m; i++)
 	{
@@ -664,25 +644,43 @@ float nlp(
 	}
 
 	/* FIR filter vector */
+	float *restrict mem = nlp->mem_fir;
+	const float *restrict fir = nlp_fir;
+	int pos = nlp->mem_pos;
+
 	for (int i = m - n; i < m; i++)
 	{
+		/* write new sample twice */
+		mem[pos] = nlp->sq[i];
+		mem[pos + NLP_NTAP] = nlp->sq[i];
 
-		for (int j = 0; j < NLP_NTAP - 1; j++)
-			nlp->mem_fir[j] = nlp->mem_fir[j + 1];
-		nlp->mem_fir[NLP_NTAP - 1] = nlp->sq[i];
+		/* FIR dot product: identical order to original */
+		float acc = 0.0f;
+		float *restrict x = &mem[pos + 1];
 
-		nlp->sq[i] = 0.0;
-		for (int j = 0; j < NLP_NTAP; j++)
-			nlp->sq[i] += nlp->mem_fir[j] * nlp_fir[j];
+		/* NLP_NTAP=48 taps, unrolled by 4 */
+		for (int j = 0; j < 48; j += 4)
+		{
+			acc += x[j + 0] * fir[j + 0];
+			acc += x[j + 1] * fir[j + 1];
+			acc += x[j + 2] * fir[j + 2];
+			acc += x[j + 3] * fir[j + 3];
+		}
+
+		nlp->sq[i] = acc;
+
+		/* advance pointer, wrap manually */
+		pos++;
+		if (pos == NLP_NTAP)
+			pos = 0;
 	}
+
+	nlp->mem_pos = pos;
 
 	/* Decimate and DFT */
-	for (int i = 0; i < PE_FFT_SIZE; i++)
-	{
-		Fw[i].r = 0.0;
-		Fw[i].i = 0.0;
-	}
-	for (int i = 0; i < m / DEC; i++)
+	memset(Fw, 0, sizeof(Fw));
+
+	for (int i = 0; i < NDEC; i++)
 	{
 		Fw[i].r = nlp->sq[i * DEC] * nlp->w[i];
 	}
@@ -1148,7 +1146,7 @@ float cheb_poly_eva(float *coef, float x)
 
 /*  float *a 		     	lpc coefficients			*/
 /*  float *freq 	      	LSP frequencies in radians  */
-/*  NOTE: This function uses 5 bisections        		*/
+/*  NOTE: This function uses 6 bisections       		*/
 int lpc_to_lsp(float *a, float *freq)
 {
 	float psuml, psumr, psumm, xl, xr, xm;
@@ -1377,7 +1375,6 @@ void lpc_post_filter(kiss_fftr_cfg fftr_fwd_cfg, float *Pw, float *ak,
 	if (bass_boost)
 	{
 		/* add 3dB to first 1 kHz to account for LP effect of PF */
-
 		for (i = 0; i < FFT_ENC / 8; i++)
 		{
 			Pw[i] *= 1.4 * 1.4;
@@ -1529,11 +1526,9 @@ float speech_to_uq_lsps(float *restrict lsp, float *restrict ak, float *restrict
 	   help occasional fails in the LSP root finding.  Important to do this
 	   after energy calculation to avoid -ve energy values.
 	*/
-	float g = 1.0f;
 	for (int i = 0; i <= LPC_ORD; i++)
 	{
-		ak[i] *= g;
-		g *= 0.994f; //gamma
+		ak[i] *= bw_gamma[i];
 	}
 
 	roots = lpc_to_lsp(ak, lsp); // hardcoded to 5 bisections

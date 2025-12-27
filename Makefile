@@ -1,6 +1,6 @@
 CC := gcc
 
-CFLAGS_COMMON := -Wall -Wextra -Wuninitialized -std=c11 -D_GNU_SOURCE
+CFLAGS_COMMON := -Wall -Wextra -Wuninitialized -Wunused-parameter -std=c11 -D_GNU_SOURCE
 CFLAGS_FP := -fno-fast-math -ffp-contract=off
 CFLAGS_OPT := -O2
 CFLAGS := $(CFLAGS_COMMON) $(CFLAGS_FP) $(CFLAGS_OPT)
