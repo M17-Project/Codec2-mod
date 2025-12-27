@@ -9,6 +9,8 @@
 #define M_PI 3.14159265358979323846
 #endif
 
+#define TWO_PI (2.0f * M_PI)
+
 int main(void)
 {
 	struct timespec tick, tock;
@@ -64,7 +66,7 @@ int main(void)
 	fclose(audio_out);
 
 	/*for (uint8_t i=0; i< 160; i++)
-		speech[i] = 0.5f * sinf(i/80.0f * 2.0f * M_PI);
+		speech[i] = 0.5f * sinf(i/80.0f * TWO_PI);
 
 	for (uint8_t j=0; j<10; j++)
 	{

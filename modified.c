@@ -16,6 +16,8 @@
 #define M_PI 3.14159265358979323846
 #endif
 
+#define TWO_PI (2.0f * M_PI)
+
 #ifndef POW10F
 #define POW10F(x) powf(10.0f, (x))
 #endif
@@ -54,25 +56,22 @@
 /* quantizers & LPC */
 #define WO_BITS 7
 #define WO_LEVELS (1 << WO_BITS)
-
 #define E_BITS 5
 #define E_LEVELS (1 << E_BITS)
 #define E_MIN_DB -10.0
 #define E_MAX_DB 40.0
-
 #define LSPD_SCALAR_INDEXES 10
 
 #define LPCPF_GAMMA 0.5
 #define LPCPF_BETA 0.2
-
 #define LSP_DELTA1 0.01 /* grid spacing for LSP root searches */
-
-#define BG_THRESH 40.0 /* only consider low levels signals for bg_est */
-#define BG_BETA 0.1	   /* averaging filter constant                   */
+#define BG_THRESH 40.0	/* only consider low levels signals for bg_est */
+#define BG_BETA 0.1		/* averaging filter constant                   */
 #define BG_MARGIN 6.0
 
-/* bandpass filter taps? */
-#define BPF_N 101
+/* FFT stuff */
+#define FFT_R (TWO_PI / FFT_ENC) /* radians/bin */
+#define FFT_1_R (FFT_ENC / TWO_PI)
 
 /* random number generator stuff */
 #define CODEC2_RAND_MAX 32767
@@ -135,13 +134,12 @@ typedef struct codec2_t
 {
 	unsigned long next_rn; /* for the pseudorandom number geneartor     */
 
-	float w[M_PITCH];				   /* [m_pitch] time domain hamming window      */
-	float W[FFT_ENC];				   /* DFT of w[]                                */
-	float Pn[2 * N_SAMP];			   /* [2*n_samp] trapezoidal synthesis window   */
-	float bpf_buf[BPF_N + 4 * N_SAMP]; /* buffer for band pass filter               */
-	float Sn[M_PITCH];				   /* [m_pitch] input speech                    */
-	float hpf_states[2];			   /* high pass filter states                   */
-	nlp_t nlp;						   /* pitch predictor states                    */
+	float w[M_PITCH];	  /* [m_pitch] time domain hamming window      */
+	float W[FFT_ENC];	  /* DFT of w[]                                */
+	float Pn[2 * N_SAMP]; /* [2*n_samp] trapezoidal synthesis window   */
+	float Sn[M_PITCH];	  /* [m_pitch] input speech                    */
+	float hpf_states[2];  /* high pass filter states                   */
+	nlp_t nlp;			  /* pitch predictor states                    */
 
 	float Sn_[2 * N_SAMP];		  /* [2*n_samp] synthesised output speech      */
 	float ex_phase;				  /* excitation model phase track              */
@@ -173,7 +171,7 @@ void make_analysis_window(kiss_fft_cfg fft_fwd_cfg, float *w, float *W)
 		w[i] = 0.0f;
 	for (int i = M_PITCH / 2 - NW / 2, j = 0; i < M_PITCH / 2 + NW / 2; i++, j++)
 	{
-		w[i] = 0.5f - 0.5f * cosf(2.0f * M_PI * j / (NW - 1));
+		w[i] = 0.5f - 0.5f * cosf(TWO_PI * j / (NW - 1));
 		m += w[i] * w[i];
 	}
 	for (int i = M_PITCH / 2 + NW / 2; i < M_PITCH; i++)
@@ -230,7 +228,7 @@ void nlp_init(nlp_t *nlp)
 
 	for (int i = 0; i < NDEC; i++)
 	{
-		nlp->w[i] = 0.5 - 0.5 * cosf(2.0f * M_PI * i / (NDEC - 1));
+		nlp->w[i] = 0.5 - 0.5 * cosf(TWO_PI * i / (NDEC - 1));
 	}
 
 	memset(nlp->sq, 0, sizeof(nlp->sq));
@@ -268,7 +266,7 @@ void codec2_init(codec2_t *c2)
 	for (int l = 1; l <= MAX_AMP; l++)
 		c2->prev_model_dec.A[l] = 0.0;
 
-	c2->prev_model_dec.Wo = 2.0f * M_PI / P_MAX;
+	c2->prev_model_dec.Wo = TWO_PI / P_MAX;
 	c2->prev_model_dec.L = M_PI / c2->prev_model_dec.Wo;
 	c2->prev_model_dec.voiced = 0;
 	memset(c2->prev_model_dec.phi, 0, sizeof(c2->prev_model_dec.phi));
@@ -286,8 +284,6 @@ void codec2_init(codec2_t *c2)
 	c2->bass_boost = 1;
 	c2->beta = LPCPF_BETA;
 	c2->gamma = LPCPF_GAMMA;
-
-	memset(c2->bpf_buf, 0, sizeof(c2->bpf_buf));
 }
 
 void dft_speech(kiss_fft_cfg fft_fwd_cfg, complex_t *Sw, float *Sn, float *w)
@@ -310,21 +306,17 @@ void dft_speech(kiss_fft_cfg fft_fwd_cfg, complex_t *Sw, float *Sn, float *w)
 
 void estimate_amplitudes(model_t *model, complex_t *Sw, int est_phase)
 {
-	int i, m;	/* loop variables */
 	int am, bm; /* bounds of current harmonic */
 	float den;	/* denominator of amplitude expression */
 
-	float r = 2.0f * M_PI / FFT_ENC;
-	float one_on_r = 1.0f / r;
-
-	for (m = 1; m <= model->L; m++)
+	for (int m = 1; m <= model->L; m++)
 	{
 		/* Estimate ampltude of harmonic */
 		den = 0.0f;
-		am = (int)((m - 0.5f) * model->Wo * one_on_r + 0.5f);
-		bm = (int)((m + 0.5f) * model->Wo * one_on_r + 0.5f);
+		am = (int)((m - 0.5f) * model->Wo * FFT_1_R + 0.5f);
+		bm = (int)((m + 0.5f) * model->Wo * FFT_1_R + 0.5f);
 
-		for (i = am; i < bm; i++)
+		for (int i = am; i < bm; i++)
 		{
 			den += Sw[i].r * Sw[i].r + Sw[i].i * Sw[i].i;
 		}
@@ -333,7 +325,7 @@ void estimate_amplitudes(model_t *model, complex_t *Sw, int est_phase)
 
 		if (est_phase)
 		{
-			int b = (int)(m * model->Wo / r + 0.5); /* DFT bin of centre of current harmonic */
+			int b = (int)(m * model->Wo / FFT_R + 0.5); /* DFT bin of centre of current harmonic */
 
 			/* Estimate phase of harmonic, this is expensive in CPU for
 			   embedded devicesso we make it an option */
@@ -401,29 +393,26 @@ float post_process_sub_multiples(complex_t *Fw, float gmax, int gmax_bin, float 
 
 void hs_pitch_refinement(model_t *model, complex_t *Sw, float pmin, float pmax, float pstep)
 {
-	int m;			   /* loop variable */
-	int b;			   /* bin for current harmonic centre */
-	float E;		   /* energy for current pitch*/
-	float Wo;		   /* current "test" fundamental freq. */
-	float Wom;		   /* Wo that maximises E */
-	float Em;		   /* mamimum energy */
-	float r, one_on_r; /* number of rads/bin */
-	float p;		   /* current pitch */
+	int m;	   /* loop variable */
+	int b;	   /* bin for current harmonic centre */
+	float E;   /* energy for current pitch*/
+	float Wo;  /* current "test" fundamental freq. */
+	float Wom; /* Wo that maximises E */
+	float Em;  /* mamimum energy */
+	float p;   /* current pitch */
 
 	/* Initialisation */
 	model->L = M_PI / model->Wo; /* use initial pitch est. for L */
 	Wom = model->Wo;
 	Em = 0.0;
-	r = 2.0f * M_PI / FFT_ENC;
-	one_on_r = 1.0 / r;
 
 	/* Determine harmonic sum for a range of Wo values */
 	for (p = pmin; p <= pmax; p += pstep)
 	{
 		E = 0.0;
-		Wo = 2.0f * M_PI / p;
+		Wo = TWO_PI / p;
 
-		float bFloat = Wo * one_on_r;
+		float bFloat = Wo * FFT_1_R;
 		float currentBFloat = bFloat;
 
 		/* Sum harmonic magnitudes */
@@ -449,22 +438,22 @@ void two_stage_pitch_refinement(model_t *model, complex_t *Sw)
 	float pmin, pmax, pstep; /* pitch refinement minimum, maximum and step */
 
 	/* Coarse refinement */
-	pmax = 2.0f * M_PI / model->Wo + 5;
-	pmin = 2.0f * M_PI / model->Wo - 5;
+	pmax = TWO_PI / model->Wo + 5;
+	pmin = TWO_PI / model->Wo - 5;
 	pstep = 1.0;
 	hs_pitch_refinement(model, Sw, pmin, pmax, pstep);
 
 	/* Fine refinement */
-	pmax = 2.0f * M_PI / model->Wo + 1;
-	pmin = 2.0f * M_PI / model->Wo - 1;
+	pmax = TWO_PI / model->Wo + 1;
+	pmin = TWO_PI / model->Wo - 1;
 	pstep = 0.25;
 	hs_pitch_refinement(model, Sw, pmin, pmax, pstep);
 
 	/* Limit range */
-	if (model->Wo < 2.0f * M_PI / P_MAX)
-		model->Wo = 2.0f * M_PI / P_MAX;
-	if (model->Wo > 2.0f * M_PI / P_MIN)
-		model->Wo = 2.0f * M_PI / P_MIN;
+	if (model->Wo < TWO_PI / P_MAX)
+		model->Wo = TWO_PI / P_MAX;
+	if (model->Wo > TWO_PI / P_MIN)
+		model->Wo = TWO_PI / P_MIN;
 
 	model->L = floorf(M_PI / model->Wo);
 
@@ -506,11 +495,11 @@ float est_voicing_mbe(model_t *model, complex_t *Sw, float *W)
 		Am.r = 0.0;
 		Am.i = 0.0;
 		den = 0.0;
-		al = ceilf((l - 0.5) * Wo * FFT_ENC / (2.0f * M_PI));
-		bl = ceilf((l + 0.5) * Wo * FFT_ENC / (2.0f * M_PI));
+		al = ceilf((l - 0.5) * Wo * FFT_ENC / TWO_PI);
+		bl = ceilf((l + 0.5) * Wo * FFT_ENC / TWO_PI);
 
 		/* Estimate amplitude of harmonic assuming harmonic is totally voiced */
-		offset = FFT_ENC / 2 - l * Wo * FFT_ENC / (2.0f * M_PI) + 0.5;
+		offset = FFT_ENC / 2 - l * Wo * FFT_ENC / TWO_PI + 0.5;
 		for (m = al; m < bl; m++)
 		{
 			Am.r += Sw[m].r * W[offset + m];
@@ -575,7 +564,7 @@ float est_voicing_mbe(model_t *model, complex_t *Sw, float *W)
 		   good match with noise due to the close harmoonic spacing.
 		   These errors are much more common than people with 50Hz3
 		   pitch, so we have just a small eratio threshold. */
-		sixty = 60.0f * 2.0f * M_PI / SAMP_RATE;
+		sixty = 60.0f * TWO_PI / SAMP_RATE;
 		if ((eratio < -4.0f) && (model->Wo <= sixty))
 			model->voiced = 0;
 	}
@@ -709,15 +698,10 @@ void sample_phase(model_t *model, complex_t *H,
 				  complex_t *A /* LPC analysis filter in freq domain */
 )
 {
-	int m, b;
-	float r;
-
-	r = 2.0f * M_PI / FFT_ENC;
-
 	/* Sample phase at harmonics */
-	for (m = 1; m <= model->L; m++)
+	for (int m = 1; m <= model->L; m++)
 	{
-		b = (int)(m * model->Wo / r + 0.5);
+		int b = (int)(m * model->Wo / FFT_R + 0.5);
 		/* synth filter 1/A is opposite phase to analysis filter */
 		// H[m] = cconj(A[b]);
 		H[m].r = A[b].r;
@@ -758,7 +742,7 @@ void postfilter(codec2_t *c2, model_t *model, float *bg_est)
 		for (m = 1; m <= model->L; m++)
 			if (model->A[m] < thresh)
 			{
-				model->phi[m] = (2.0f * M_PI / CODEC2_RAND_MAX) * (float)codec2_rand(&c2->next_rn);
+				model->phi[m] = (TWO_PI / CODEC2_RAND_MAX) * (float)codec2_rand(&c2->next_rn);
 				uv++;
 			}
 }
@@ -789,7 +773,7 @@ void synthesise(kiss_fftr_cfg fftr_inv_cfg,
 	/* Now set up frequency domain synthesised speech */
 	for (l = 1; l <= model->L; l++)
 	{
-		b = (int)(l * model->Wo * FFT_DEC / (2.0f * M_PI) + 0.5);
+		b = (int)(l * model->Wo * FFT_DEC / TWO_PI + 0.5);
 		if (b > ((FFT_DEC / 2) - 1))
 		{
 			b = (FFT_DEC / 2) - 1;
@@ -837,7 +821,7 @@ void phase_synth_zero_order(
 	   ex_phase[0] += (*prev_Wo+model->Wo)*N_SAMP/2;
 	*/
 	ex_phase[0] += (model->Wo) * N_SAMP;
-	ex_phase[0] -= 2.0f * M_PI * floorf(ex_phase[0] / (2.0f * M_PI) + 0.5);
+	ex_phase[0] -= TWO_PI * floorf(ex_phase[0] / TWO_PI + 0.5);
 
 	for (m = 1; m <= model->L; m++)
 	{
@@ -853,7 +837,7 @@ void phase_synth_zero_order(
 			   phase is not needed in the unvoiced case, but no harm in
 			   keeping it.
 			*/
-			float phi = 2.0f * M_PI * (float)codec2_rand(&c2->next_rn) / CODEC2_RAND_MAX;
+			float phi = TWO_PI * (float)codec2_rand(&c2->next_rn) / CODEC2_RAND_MAX;
 			Ex[m].r = cosf(phi);
 			Ex[m].i = sinf(phi);
 		}
@@ -909,7 +893,7 @@ void analyse_one_frame(codec2_t *c2, model_t *model, const int16_t *speech)
 
 	/* Estimate pitch */
 	nlp(&c2->nlp, c2->Sn, N_SAMP, &pitch, &c2->prev_f0_enc);
-	model->Wo = 2.0f * M_PI / pitch;
+	model->Wo = TWO_PI / pitch;
 	model->L = M_PI / model->Wo;
 
 	/* estimate model parameters */
@@ -1358,7 +1342,7 @@ void lpc_post_filter(kiss_fftr_cfg fftr_fwd_cfg, float *Pw, float *ak,
 	}
 }
 
-void aks_to_mag2(kiss_fftr_cfg fftr_fwd_cfg,
+void aks_to_mag2(codec2_t *c2,
 				 float *ak,		 /* LPC's */
 				 model_t *model, /* sinusoidal model parameters for this frame */
 				 float E,		 /* energy term */
@@ -1373,19 +1357,21 @@ void aks_to_mag2(kiss_fftr_cfg fftr_fwd_cfg,
 {
 	int i, m;	/* loop variables */
 	int am, bm; /* limits of current band */
-	float r;	/* no. rads/bin */
 	float Em;	/* energy in band */
 	float Am;	/* spectral amplitude sample */
 	float signal, noise;
 
-	r = 2.0f * M_PI / FFT_ENC;
-
 	/* Determine DFT of A(exp(jw)) --------------------------------------------*/
-	float a[FFT_ENC] = {0}; /* input to FFT for power spectrum */
+	float *a = (float *)c2->fft_buffer; /* input to FFT for power spectrum */
+
+	/* zero FFT input */
+	memset(a, 0, FFT_ENC * sizeof(float));
 
 	for (i = 0; i <= LPC_ORD; i++)
 		a[i] = ak[i];
-	kiss_fftr(fftr_fwd_cfg, a, Aw);
+
+	/* real-valued FFT */
+	kiss_fftr(c2->fftr_fwd_cfg, a, Aw);
 
 	/* Determine power spectrum P(w) = E/(A(exp(jw))^2 ------------------------*/
 	float Pw[FFT_ENC / 2];
@@ -1396,7 +1382,7 @@ void aks_to_mag2(kiss_fftr_cfg fftr_fwd_cfg,
 	}
 
 	if (pf)
-		lpc_post_filter(fftr_fwd_cfg, Pw, ak, beta, gamma, bass_boost, E);
+		lpc_post_filter(c2->fftr_fwd_cfg, Pw, ak, beta, gamma, bass_boost, E);
 	else
 	{
 		for (i = 0; i < FFT_ENC / 2; i++)
@@ -1413,8 +1399,8 @@ void aks_to_mag2(kiss_fftr_cfg fftr_fwd_cfg,
 
 	for (m = 1; m <= model->L; m++)
 	{
-		am = (int)((m - 0.5) * model->Wo / r + 0.5);
-		bm = (int)((m + 0.5) * model->Wo / r + 0.5);
+		am = (int)((m - 0.5) * model->Wo / FFT_R + 0.5);
+		bm = (int)((m + 0.5) * model->Wo / FFT_R + 0.5);
 
 		// FIXME: With arm_rfft_fast_f32 we have to use this
 		// otherwise sometimes a to high bm is calculated
@@ -1772,7 +1758,7 @@ void codec2_decode(codec2_t *c2, int16_t *speech, const uint8_t *bits)
 	for (i = 0; i < 2; i++)
 	{
 		lsp_to_lpc(&lsps[i][0], &ak[i][0]);
-		aks_to_mag2(c2->fftr_fwd_cfg, &ak[i][0], &model[i], e[i], &snr, 0,
+		aks_to_mag2(c2, &ak[i][0], &model[i], e[i], &snr, 0,
 					c2->lpc_pf, c2->bass_boost, c2->beta, c2->gamma, Aw);
 		apply_lpc_correction(&model[i]);
 		synthesise_one_frame(c2, &speech[N_SAMP * i], &model[i], Aw, 1.0f);
@@ -1839,7 +1825,7 @@ int main(void)
 	fclose(audio_out);
 
 	/*for (uint8_t i = 0; i < 160; i++)
-		speech[i] = 0.5f * sinf(i / 80.0f * 2.0f * M_PI);
+		speech[i] = 0.5f * sinf(i / 80.0f * TWO_PI);
 
 	for (uint8_t j = 0; j < 10; j++)
 	{
