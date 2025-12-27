@@ -126,8 +126,9 @@ typedef struct nlp_t
 	float mem_x, mem_y;			 /* memory for notch filter      */
 	float mem_fir[NLP_NTAP * 2]; /* decimation FIR filter memory */
 	int mem_pos;
-	kiss_fft_cfg fft_cfg; /* kiss FFT config              */
-	complex_t Fw[PE_FFT_SIZE];
+	kiss_fftr_cfg fftr_cfg; /* kiss FFT config              */
+	float fftr_buff[PE_FFT_SIZE];
+	complex_t Fw[PE_FFT_SIZE / 2 + 1];
 } nlp_t;
 
 typedef struct codec2_t
@@ -165,41 +166,37 @@ typedef struct codec2_t
 
 void make_analysis_window(kiss_fft_cfg fft_fwd_cfg, float *w, float *W)
 {
-	float m;
 	complex_t wshift[FFT_ENC] = {0};
-	int i, j;
 
-	m = 0.0;
-	for (i = 0; i < M_PITCH / 2 - NW / 2; i++)
+	float m = 0.0;
+	for (int i = 0; i < M_PITCH / 2 - NW / 2; i++)
 		w[i] = 0.0f;
-	for (i = M_PITCH / 2 - NW / 2, j = 0; i < M_PITCH / 2 + NW / 2; i++, j++)
+	for (int i = M_PITCH / 2 - NW / 2, j = 0; i < M_PITCH / 2 + NW / 2; i++, j++)
 	{
 		w[i] = 0.5f - 0.5f * cosf(2.0f * M_PI * j / (NW - 1));
 		m += w[i] * w[i];
 	}
-	for (i = M_PITCH / 2 + NW / 2; i < M_PITCH; i++)
+	for (int i = M_PITCH / 2 + NW / 2; i < M_PITCH; i++)
 		w[i] = 0.0f;
 
 	m = 1.0f / sqrtf(m * FFT_ENC);
-	for (i = 0; i < M_PITCH; i++)
+	for (int i = 0; i < M_PITCH; i++)
 	{
 		w[i] *= m;
 	}
 
-	complex_t temp[FFT_ENC];
-
-	for (i = 0; i < NW / 2; i++)
+	for (int i = 0; i < NW / 2; i++)
 		wshift[i].r = w[i + M_PITCH / 2];
 
-	for (i = FFT_ENC - NW / 2, j = M_PITCH / 2 - NW / 2; i < FFT_ENC; i++, j++)
+	for (int i = FFT_ENC - NW / 2, j = M_PITCH / 2 - NW / 2; i < FFT_ENC; i++, j++)
 		wshift[i].r = w[j];
 
-	kiss_fft(fft_fwd_cfg, wshift, temp);
+	kiss_fft(fft_fwd_cfg, wshift, wshift);
 
-	for (i = 0; i < FFT_ENC / 2; i++)
+	for (int i = 0; i < FFT_ENC / 2; i++)
 	{
-		W[i] = temp[i + FFT_ENC / 2].r;
-		W[i + FFT_ENC / 2] = temp[i].r;
+		W[i] = wshift[i + FFT_ENC / 2].r;
+		W[i + FFT_ENC / 2] = wshift[i].r;
 	}
 }
 
@@ -241,16 +238,16 @@ void nlp_init(nlp_t *nlp)
 	nlp->mem_x = 0.0;
 	nlp->mem_y = 0.0;
 
-		nlp->fft_cfg = kiss_fft_alloc(PE_FFT_SIZE, 0, NULL, NULL);
+	nlp->fftr_cfg = kiss_fftr_alloc(PE_FFT_SIZE, 0, NULL, NULL);
 }
 
 void codec2_init(codec2_t *c2)
 {
-	int i, l;
+	_Static_assert(PE_FFT_SIZE % 2 == 0, "PE_FFT_SIZE must be even");
 
-	c2->next_rn = 1;
+	c2->next_rn = 1; // random number geterator - seed
 
-	for (i = 0; i < M_PITCH; i++)
+	for (int i = 0; i < M_PITCH; i++)
 		c2->Sn[i] = 1.0f;
 
 	c2->hpf_states[0] = c2->hpf_states[1] = 0.0;
@@ -268,7 +265,7 @@ void codec2_init(codec2_t *c2)
 	c2->bg_est = 0.0;
 	c2->ex_phase = 0.0;
 
-	for (l = 1; l <= MAX_AMP; l++)
+	for (int l = 1; l <= MAX_AMP; l++)
 		c2->prev_model_dec.A[l] = 0.0;
 
 	c2->prev_model_dec.Wo = 2.0f * M_PI / P_MAX;
@@ -277,7 +274,7 @@ void codec2_init(codec2_t *c2)
 	memset(c2->prev_model_dec.phi, 0, sizeof(c2->prev_model_dec.phi));
 	c2->ex_phase = 0.0f;
 
-	for (i = 0; i < LPC_ORD; i++)
+	for (int i = 0; i < LPC_ORD; i++)
 	{
 		c2->prev_lsps_dec[i] = i * M_PI / (LPC_ORD + 1);
 	}
@@ -293,31 +290,22 @@ void codec2_init(codec2_t *c2)
 	memset(c2->bpf_buf, 0, sizeof(c2->bpf_buf));
 }
 
-void codec2_fft_inplace(codec2_t *c2, kiss_fft_cfg cfg, kiss_fft_cpx *inout)
+void dft_speech(kiss_fft_cfg fft_fwd_cfg, complex_t *Sw, float *Sn, float *w)
 {
-	kiss_fft_cpx *restrict in = c2->fft_buffer;
-	memcpy(in, inout, FFT_ENC * sizeof(kiss_fft_cpx));
-	kiss_fft(cfg, in, inout);
-}
-
-void dft_speech(codec2_t *c2, kiss_fft_cfg fft_fwd_cfg, complex_t *Sw, float *Sn, float *w)
-{
-	int i;
-
 	memset(Sw, 0, FFT_ENC * sizeof(*Sw));
 
 	/* Centre analysis window on time axis, we need to arrange input
 	   to FFT this way to make FFT phases correct */
 	/* move 2nd half to start of FFT input vector */
-	for (i = 0; i < NW / 2; i++)
+	for (int i = 0; i < NW / 2; i++)
 		Sw[i].r = Sn[i + M_PITCH / 2] * w[i + M_PITCH / 2];
 
 	/* move 1st half to end of FFT input vector */
-	for (i = 0; i < NW / 2; i++)
+	for (int i = 0; i < NW / 2; i++)
 		Sw[FFT_ENC - NW / 2 + i].r =
 			Sn[i + M_PITCH / 2 - NW / 2] * w[i + M_PITCH / 2 - NW / 2];
 
-	codec2_fft_inplace(c2, fft_fwd_cfg, Sw);
+	kiss_fft(fft_fwd_cfg, Sw, Sw);
 }
 
 void estimate_amplitudes(model_t *model, complex_t *Sw, int est_phase)
@@ -522,7 +510,6 @@ float est_voicing_mbe(model_t *model, complex_t *Sw, float *W)
 		bl = ceilf((l + 0.5) * Wo * FFT_ENC / (2.0f * M_PI));
 
 		/* Estimate amplitude of harmonic assuming harmonic is totally voiced */
-
 		offset = FFT_ENC / 2 - l * Wo * FFT_ENC / (2.0f * M_PI) + 0.5;
 		for (m = al; m < bl; m++)
 		{
@@ -535,7 +522,6 @@ float est_voicing_mbe(model_t *model, complex_t *Sw, float *W)
 		Am.i = Am.i / den;
 
 		/* Determine error between estimated harmonic and original */
-
 		for (m = al; m < bl; m++)
 		{
 			Ew.r = Sw[m].r - Am.r * W[offset + m];
@@ -598,7 +584,6 @@ float est_voicing_mbe(model_t *model, complex_t *Sw, float *W)
 }
 
 float nlp(
-	codec2_t *c2,
 	nlp_t *restrict nlp,
 	float *restrict Sn,		/* input speech vector */
 	int n,					/* frames shift (no. new samples in Sn[])             */
@@ -671,19 +656,19 @@ float nlp(
 	nlp->mem_pos = pos;
 
 	/* Decimate and DFT */
-	memset(Fw, 0, sizeof(nlp->Fw));
+	memset(nlp->fftr_buff, 0, sizeof(nlp->fftr_buff));
 
 	for (int i = 0; i < NDEC; i++)
 	{
-		Fw[i].r = nlp->sq[i * DEC] * nlp->w[i];
+		nlp->fftr_buff[i] = nlp->sq[i * DEC] * nlp->w[i];
 	}
 
-	// FIXME: check if this can be converted to a real fft
-	// since all imag inputs are 0
-	codec2_fft_inplace(c2, nlp->fft_cfg, Fw);
+	kiss_fftr(nlp->fftr_cfg, nlp->fftr_buff, Fw);
 
-	for (int i = 0; i < PE_FFT_SIZE; i++)
+	for (int i = 0; i < PE_FFT_SIZE / 2 + 1; i++)
+	{
 		Fw[i].r = Fw[i].r * Fw[i].r + Fw[i].i * Fw[i].i;
+	}
 
 	/* todo: express everything in f0, as pitch in samples is dep on Fs */
 	int pmin = P_MIN;
@@ -692,7 +677,12 @@ float nlp(
 	/* find global peak */
 	gmax = 0.0f;
 	gmax_bin = PE_FFT_SIZE * DEC / pmax;
-	for (int i = PE_FFT_SIZE * DEC / pmax; i <= PE_FFT_SIZE * DEC / pmin; i++)
+	int lo = PE_FFT_SIZE * DEC / pmax;
+	int hi = PE_FFT_SIZE * DEC / pmin;
+	if (hi > PE_FFT_SIZE / 2)
+		hi = PE_FFT_SIZE / 2;
+
+	for (int i = lo; i <= hi; i++)
 	{
 		if (Fw[i].r > gmax)
 		{
@@ -869,12 +859,10 @@ void phase_synth_zero_order(
 		}
 
 		/* filter using LPC filter */
-
 		A_[m].r = H[m].r * Ex[m].r - H[m].i * Ex[m].i;
 		A_[m].i = H[m].i * Ex[m].r + H[m].r * Ex[m].i;
 
 		/* modify sinusoidal phase */
-
 		new_phi = atan2f(A_[m].i, A_[m].r + 1E-12);
 		model->phi[m] = new_phi;
 	}
@@ -917,18 +905,18 @@ void analyse_one_frame(codec2_t *c2, model_t *model, const int16_t *speech)
 	for (i = 0; i < N_SAMP; i++)
 		c2->Sn[i + M_PITCH - N_SAMP] = speech[i];
 
-	dft_speech(c2, c2->fft_fwd_cfg, Sw, c2->Sn, c2->w);
+	dft_speech(c2->fft_fwd_cfg, Sw, c2->Sn, c2->w);
 
 	/* Estimate pitch */
-	nlp(c2, &c2->nlp, c2->Sn, N_SAMP, &pitch, &c2->prev_f0_enc);
+	nlp(&c2->nlp, c2->Sn, N_SAMP, &pitch, &c2->prev_f0_enc);
 	model->Wo = 2.0f * M_PI / pitch;
 	model->L = M_PI / model->Wo;
 
 	/* estimate model parameters */
 	two_stage_pitch_refinement(model, Sw);
 
-	/* estimate phases when doing ML experiments */
-	estimate_amplitudes(model, Sw, 0);
+	/* estimate phases */
+	estimate_amplitudes(model, Sw, 1);
 	est_voicing_mbe(model, Sw, c2->W);
 }
 
