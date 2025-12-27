@@ -7,7 +7,7 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include <math.h>
-#include <assert.h>
+#include <time.h>
 
 #include "kiss_fft.h"
 #include "kiss_fftr.h"
@@ -241,8 +241,6 @@ void nlp_init(nlp_t *nlp)
 
 	nlp->m = m;
 
-	assert(m <= PMAX_M);
-
 	for (i = 0; i < m / DEC; i++)
 	{
 		nlp->w[i] = 0.5 - 0.5 * cosf(2.0f * M_PI * i / (m / DEC - 1));
@@ -258,7 +256,6 @@ void nlp_init(nlp_t *nlp)
 		nlp->mem_fir[i] = 0.0;
 
 	nlp->fft_cfg = kiss_fft_alloc(PE_FFT_SIZE, 0, NULL, NULL);
-	assert(nlp->fft_cfg != NULL);
 }
 
 void codec2_init(codec2_t *c2)
@@ -641,7 +638,6 @@ float nlp(
 	int m, i, j;
 	float best_f0;
 
-	assert(nlp_state != NULL);
 	nlp = (nlp_t *)nlp_state;
 	m = nlp->m;
 
@@ -958,7 +954,6 @@ void synthesise_one_frame(codec2_t *c2, int16_t *speech, model_t *model,
 
 	/* LPC based phase synthesis */
 	complex_t H[MAX_AMP + 1];
-	//memset(model->phi, 0, sizeof(model->phi));
 	sample_phase(model, H, Aw);
 	phase_synth_zero_order(c2, model, &c2->ex_phase, H);
 	postfilter(c2, model, &c2->bg_est);
@@ -1123,8 +1118,7 @@ void levinson_durbin(float *R,	 /* order+1 autocorrelation coeff */
 /*  float coef[]  	coefficients of the polynomial to be evaluated 	*/
 /*  float x   		the point where polynomial is to be evaluated 	*/
 /*  int order 		order of the polynomial 			*/
-static float cheb_poly_eva(float *coef, float x)
-
+float cheb_poly_eva(float *coef, float x)
 {
 	int i;
 	float *t, *u, *v, sum;
@@ -1843,6 +1837,8 @@ void codec2_decode(codec2_t *c2, int16_t *speech, const uint8_t *bits)
 
 int main(void)
 {
+	struct timespec tick, tock;
+
 	codec2_t c2;
 	codec2_init(&c2);
 
@@ -1852,17 +1848,25 @@ int main(void)
 	FILE *audio_in, *bitstream, *audio_out;
 
 	audio_in = fopen("../../sample.raw", "rb");
-	bitstream = fopen("../../sample.bin", "wb");
-	audio_out = fopen("../../decoded.raw", "wb");
+	bitstream = fopen("../../modified_bitstream.bin", "wb");
+	audio_out = fopen("../../modified_decoded.raw", "wb");
 
-	while (fread(speech, sizeof(speech), 1, audio_in) == 1)
+	clock_gettime(CLOCK_MONOTONIC, &tick);
+	size_t rb;
+	while ((rb = fread(speech, 1, sizeof(speech), audio_in)) > 0)
 	{
+		if (rb < sizeof(speech))
+			memset(&speech[rb / 2], 0, sizeof(speech) - rb); //`break;` here instead to cut away the remaining audio (just like `c2enc` does)
+
 		codec2_encode(&c2, encoded, speech);
 		fwrite(encoded, sizeof(encoded), 1, bitstream);
 	}
+	clock_gettime(CLOCK_MONOTONIC, &tock);
 
 	fclose(bitstream);
-	bitstream = fopen("../../sample.bin", "rb");
+	double elapsed = (tock.tv_sec - tick.tv_sec) + (tock.tv_nsec - tick.tv_nsec) * 1e-6;
+	fprintf(stderr, "Elapsed time: %.3f ms\n", elapsed);
+	bitstream = fopen("../../modified_bitstream.bin", "rb");
 	codec2_init(&c2);
 
 	while (fread(encoded, 8, 1, bitstream) == 1)
