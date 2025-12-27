@@ -30,7 +30,7 @@ int main(void)
 	while ((rb = fread(speech, 1, sizeof(speech), audio_in)) > 0)
 	{
 		if (rb < sizeof(speech))
-			memset(&speech[rb/2], 0, sizeof(speech)-rb); //`break;` here instead to cut away the remaining audio (just like `c2enc` does)
+			memset(&speech[rb / 2], 0, sizeof(speech) - rb); //`break;` here instead to cut away the remaining audio (just like `c2enc` does)
 
 		codec2_encode(c2, encoded, speech);
 		fwrite(encoded, sizeof(encoded), 1, bitstream);
@@ -38,8 +38,16 @@ int main(void)
 	clock_gettime(CLOCK_MONOTONIC, &tock);
 
 	fclose(bitstream);
-	double elapsed = (tock.tv_sec  - tick.tv_sec) + (tock.tv_nsec - tick.tv_nsec) * 1e-6;
-	fprintf(stderr, "Elapsed time: %.3f ms\n", elapsed);
+
+	long sec = tock.tv_sec - tick.tv_sec;
+	long nsec = tock.tv_nsec - tick.tv_nsec;
+	if (nsec < 0)
+	{
+		sec--;
+		nsec += 1000000000L;
+	}
+	double elapsed_ms = sec * 1e3 + nsec * 1e-6;
+	fprintf(stderr, "Elapsed time: %.3f ms\n", elapsed_ms);
 
 	bitstream = fopen("../../reference_bitstream.bin", "rb");
 	codec2_destroy(c2);
