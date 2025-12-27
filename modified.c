@@ -624,32 +624,30 @@ float est_voicing_mbe(model_t *model, complex_t *Sw, float *W)
 }
 
 float nlp(
-	void *nlp_state, float *Sn, /* input speech vector */
-	int n,						/* frames shift (no. new samples in Sn[])             */
-	float *pitch,				/* estimated pitch period in samples at current Fs    */
-	float *prev_f0				/* previous pitch f0 in Hz, memory for pitch tracking */
+	nlp_t *nlp,
+	float *Sn,	   /* input speech vector */
+	int n,		   /* frames shift (no. new samples in Sn[])             */
+	float *pitch,  /* estimated pitch period in samples at current Fs    */
+	float *prev_f0 /* previous pitch f0 in Hz, memory for pitch tracking */
 )
 {
-	nlp_t *nlp;
 	float notch;			   /* current notch filter output          */
 	complex_t Fw[PE_FFT_SIZE]; /* DFT of squared signal (input/output) */
 	float gmax;
 	int gmax_bin;
-	int m, i, j;
 	float best_f0;
 
-	nlp = (nlp_t *)nlp_state;
-	m = nlp->m;
+	int m = nlp->m;
 
 	/* Square, notch filter at DC, and LP filter vector */
 
 	/* Square latest input samples */
-	for (i = m - n; i < m; i++)
+	for (int i = m - n; i < m; i++)
 	{
 		nlp->sq[i] = Sn[i] * Sn[i];
 	}
 
-	for (i = m - n; i < m; i++)
+	for (int i = m - n; i < m; i++)
 	{ /* notch filter at DC */
 		notch = nlp->sq[i] - nlp->mem_x;
 		notch += COEFF * nlp->mem_y;
@@ -666,25 +664,25 @@ float nlp(
 	}
 
 	/* FIR filter vector */
-	for (i = m - n; i < m; i++)
+	for (int i = m - n; i < m; i++)
 	{
 
-		for (j = 0; j < NLP_NTAP - 1; j++)
+		for (int j = 0; j < NLP_NTAP - 1; j++)
 			nlp->mem_fir[j] = nlp->mem_fir[j + 1];
 		nlp->mem_fir[NLP_NTAP - 1] = nlp->sq[i];
 
 		nlp->sq[i] = 0.0;
-		for (j = 0; j < NLP_NTAP; j++)
+		for (int j = 0; j < NLP_NTAP; j++)
 			nlp->sq[i] += nlp->mem_fir[j] * nlp_fir[j];
 	}
 
 	/* Decimate and DFT */
-	for (i = 0; i < PE_FFT_SIZE; i++)
+	for (int i = 0; i < PE_FFT_SIZE; i++)
 	{
 		Fw[i].r = 0.0;
 		Fw[i].i = 0.0;
 	}
-	for (i = 0; i < m / DEC; i++)
+	for (int i = 0; i < m / DEC; i++)
 	{
 		Fw[i].r = nlp->sq[i * DEC] * nlp->w[i];
 	}
@@ -693,7 +691,7 @@ float nlp(
 	// since all imag inputs are 0
 	codec2_fft_inplace(nlp->fft_cfg, Fw);
 
-	for (i = 0; i < PE_FFT_SIZE; i++)
+	for (int i = 0; i < PE_FFT_SIZE; i++)
 		Fw[i].r = Fw[i].r * Fw[i].r + Fw[i].i * Fw[i].i;
 
 	/* todo: express everything in f0, as pitch in samples is dep on Fs */
@@ -703,7 +701,7 @@ float nlp(
 	/* find global peak */
 	gmax = 0.0f;
 	gmax_bin = PE_FFT_SIZE * DEC / pmax;
-	for (i = PE_FFT_SIZE * DEC / pmax; i <= PE_FFT_SIZE * DEC / pmin; i++)
+	for (int i = PE_FFT_SIZE * DEC / pmax; i <= PE_FFT_SIZE * DEC / pmin; i++)
 	{
 		if (Fw[i].r > gmax)
 		{
@@ -715,7 +713,7 @@ float nlp(
 	best_f0 = post_process_sub_multiples(Fw, gmax, gmax_bin, prev_f0);
 
 	/* Shift samples in buffer to make room for new samples */
-	for (i = 0; i < m - n; i++)
+	for (int i = 0; i < m - n; i++)
 		nlp->sq[i] = nlp->sq[i + n];
 
 	/* return pitch period in samples and F0 estimate */
@@ -1117,104 +1115,80 @@ void levinson_durbin(float *R,	 /* order+1 autocorrelation coeff */
 
 /*  float coef[]  	coefficients of the polynomial to be evaluated 	*/
 /*  float x   		the point where polynomial is to be evaluated 	*/
-/*  int order 		order of the polynomial 			*/
+/*  int order 		order of the polynomial 			            */
+/*  NOTE: this function uses fully unrolled loop for LPC_ORD=10     */
 float cheb_poly_eva(float *coef, float x)
 {
-	int i;
-	float *t, *u, *v, sum;
-	float Tm[(LPC_ORD / 2) + 1];
+	// N = 5 (LPC_ORD/2)
+	float T0 = 1.0f;
+	float T1 = x;
 
-	/* Initialise pointers */
+	float sum = coef[5] * T0 + coef[4] * T1;
 
-	t = Tm; /* T[i-2] 			*/
-	*t++ = 1.0;
-	u = t--; /* T[i-1] 			*/
-	*u++ = x;
-	v = u--; /* T[i] 			*/
+	const float two_x = 2.0f * x;
 
-	/* Evaluate chebyshev series formulation using iterative approach 	*/
+	// i = 2
+	float T2 = two_x * T1 - T0;
+	sum += coef[3] * T2;
 
-	for (i = 2; i <= LPC_ORD / 2; i++)
-		*v++ = (2 * x) * (*u++) - *t++; /* T[i] = 2*x*T[i-1] - T[i-2]	*/
+	// i = 3
+	float T3 = two_x * T2 - T1;
+	sum += coef[2] * T3;
 
-	sum = 0.0; /* initialise sum to zero 	*/
-	t = Tm;	   /* reset pointer 		*/
+	// i = 4
+	float T4 = two_x * T3 - T2;
+	sum += coef[1] * T4;
 
-	/* Evaluate polynomial and return value also free memory space */
-
-	for (i = 0; i <= LPC_ORD / 2; i++)
-		sum += coef[(LPC_ORD / 2) - i] * *t++;
+	// i = 5
+	float T5 = two_x * T4 - T3;
+	sum += coef[0] * T5;
 
 	return sum;
 }
 
 /*  float *a 		     	lpc coefficients			*/
-/*  float *freq 	      	LSP frequencies in radians      	*/
-/*  int nb			number of sub-intervals (4) 		*/
-int lpc_to_lsp(float *a, float *freq, int nb)
+/*  float *freq 	      	LSP frequencies in radians  */
+/*  NOTE: This function uses 5 bisections        		*/
+int lpc_to_lsp(float *a, float *freq)
 {
-	float psuml, psumr, psumm, temp_xr, xl, xr, xm = 0;
-	float temp_psumr;
-	int i, j, m, flag, k;
-	float *px; /* ptrs of respective P'(z) & Q'(z)	*/
-	float *qx;
-	float *p;
-	float *q;
-	float *pt;	   /* ptr used for cheb_poly_eval()
-					  whether P' or Q' 			*/
-	int roots = 0; /* number of roots found 	        */
+	float psuml, psumr, psumm, xl, xr, xm;
+	int i, j, m;
+	float *pt;	   /* ptr used for cheb_poly_eval(), whether P' or Q' */
+	int roots = 0; /* number of roots found */
 	float Q[LPC_ORD + 1];
 	float P[LPC_ORD + 1];
 
-	flag = 1;
 	m = LPC_ORD / 2; /* order of P'(z) & Q'(z) polynimials 	*/
 
-	/* Allocate memory space for polynomials */
-	/* determine P'(z)'s and Q'(z)'s coefficients where
-	  P'(z) = P(z)/(1 + z^(-1)) and Q'(z) = Q(z)/(1-z^(-1)) */
-	px = P; /* initilaise ptrs */
-	qx = Q;
-	p = px;
-	q = qx;
-	*px++ = 1.0;
-	*qx++ = 1.0;
+	P[0] = Q[0] = 1.0f;
 	for (i = 1; i <= m; i++)
 	{
-		*px++ = a[i] + a[LPC_ORD + 1 - i] - *p++;
-		*qx++ = a[i] - a[LPC_ORD + 1 - i] + *q++;
+		P[i] = a[i] + a[LPC_ORD + 1 - i] - P[i - 1];
+		Q[i] = a[i] - a[LPC_ORD + 1 - i] + Q[i - 1];
 	}
-	px = P;
-	qx = Q;
+
 	for (i = 0; i < m; i++)
 	{
-		*px = 2 * *px;
-		*qx = 2 * *qx;
-		px++;
-		qx++;
+		P[i] *= 2.0f;
+		Q[i] *= 2.0f;
 	}
-	px = P; /* re-initialise ptrs 			*/
-	qx = Q;
 
 	/* Search for a zero in P'(z) polynomial first and then alternate to Q'(z).
 	Keep alternating between the two polynomials as each zero is found 	*/
-	xr = 0;	  /* initialise xr to zero 		*/
 	xl = 1.0; /* start at point xl = 1 		*/
+	const float delta = LSP_DELTA1;
 
 	for (j = 0; j < LPC_ORD; j++)
 	{
-		if (j % 2) /* determines whether P' or Q' is eval. */
-			pt = qx;
-		else
-			pt = px;
+		pt = (j & 1) ? Q : P; /* determines whether P' or Q' is eval. */
 
+		xr = xl;
 		psuml = cheb_poly_eva(pt, xl); /* evals poly. at xl 	*/
-		flag = 1;
-		while (flag && (xr >= -1.0))
+
+		while (xr >= -1.0f)
 		{
-			xr = xl - LSP_DELTA1;		   /* interval spacing 	*/
+			xr = xl - delta;			   /* interval spacing 	*/
 			psumr = cheb_poly_eva(pt, xr); /* poly(xl-delta_x) 	*/
-			temp_psumr = psumr;
-			temp_xr = xr;
 
 			/* if no sign change increment xr and re-evaluate
 			   poly(xr). Repeat til sign change.  if a sign change has
@@ -1224,36 +1198,44 @@ int lpc_to_lsp(float *a, float *freq, int nb)
 			   and poly(xl) set interval between xm and xr else set
 			   interval between xl and xr and repeat till root is located
 			   within the specified limits  */
-			if (((psumr * psuml) < 0.0) || (psumr == 0.0))
+			if ((psumr <= 0.0f && psuml >= 0.0f) || (psumr >= 0.0f && psuml <= 0.0f)) // avoid one float multiplication
 			{
 				roots++;
 
-				psumm = psuml;
-				for (k = 0; k <= nb; k++)
-				{
-					xm = (xl + xr) / 2; /* bisect the interval 	*/
-					psumm = cheb_poly_eva(pt, xm);
-					if (psumm * psuml > 0.)
-					{
-						psuml = psumm;
-						xl = xm;
-					}
-					else
-					{
-						psumr = psumm;
-						xr = xm;
-					}
-				}
+				// manually unrolled for nb=5 (thus 6x)
+				xm = 0.5f * (xl + xr);
+				psumm = cheb_poly_eva(pt, xm);
+				(psumm * psuml > 0.f) ? (xl = xm, psuml = psumm) : (xr = xm);
+
+				xm = 0.5f * (xl + xr);
+				psumm = cheb_poly_eva(pt, xm);
+				(psumm * psuml > 0.f) ? (xl = xm, psuml = psumm) : (xr = xm);
+
+				xm = 0.5f * (xl + xr);
+				psumm = cheb_poly_eva(pt, xm);
+				(psumm * psuml > 0.f) ? (xl = xm, psuml = psumm) : (xr = xm);
+
+				xm = 0.5f * (xl + xr);
+				psumm = cheb_poly_eva(pt, xm);
+				(psumm * psuml > 0.f) ? (xl = xm, psuml = psumm) : (xr = xm);
+
+				xm = 0.5f * (xl + xr);
+				psumm = cheb_poly_eva(pt, xm);
+				(psumm * psuml > 0.f) ? (xl = xm, psuml = psumm) : (xr = xm);
+
+				xm = 0.5f * (xl + xr);
+				psumm = cheb_poly_eva(pt, xm);
+				(psumm * psuml > 0.f) ? (xl = xm, psuml = psumm) : (xr = xm);
 
 				/* once zero is found, reset initial interval to xr 	*/
 				freq[j] = (xm);
 				xl = xm;
-				flag = 0; /* reset flag for next search 	*/
+				break;
 			}
 			else
 			{
-				psuml = temp_psumr;
-				xl = temp_xr;
+				psuml = psumr;
+				xl = xr;
 			}
 		}
 	}
@@ -1514,53 +1496,57 @@ void apply_lpc_correction(model_t *model)
 	}
 }
 
-float speech_to_uq_lsps(float *lsp, float *ak, float *Sn, float *w)
+float speech_to_uq_lsps(float *restrict lsp, float *restrict ak, float *restrict energy, const float *restrict Sn, const float *restrict w)
 {
-	int i, roots;
+	int roots;
 	float Wn[M_PITCH];
 	float R[LPC_ORD + 1];
 	float e, E;
 
 	e = 0.0;
-	for (i = 0; i < M_PITCH; i++)
+	for (int i = 0; i < M_PITCH; i++)
 	{
 		Wn[i] = Sn[i] * w[i];
 		e += Wn[i] * Wn[i];
 	}
 
 	/* trap 0 energy case as LPC analysis will fail */
-
-	if (e == 0.0)
+	if (e == 0.0f)
 	{
-		for (i = 0; i < LPC_ORD; i++)
+		for (int i = 0; i < LPC_ORD; i++)
 			lsp[i] = (M_PI / LPC_ORD) * (float)i;
-		return 0.0;
+		return 0.0f;
 	}
 
 	autocorrelate(Wn, R);
 	levinson_durbin(R, ak);
 
-	E = 0.0;
-	for (i = 0; i <= LPC_ORD; i++)
+	E = 0.0f;
+	for (int i = 0; i <= LPC_ORD; i++)
 		E += ak[i] * R[i];
 
 	/* 15 Hz BW expansion as I can't hear the difference and it may help
 	   help occasional fails in the LSP root finding.  Important to do this
 	   after energy calculation to avoid -ve energy values.
 	*/
+	float g = 1.0f;
+	for (int i = 0; i <= LPC_ORD; i++)
+	{
+		ak[i] *= g;
+		g *= 0.994f; //gamma
+	}
 
-	for (i = 0; i <= LPC_ORD; i++)
-		ak[i] *= powf(0.994, (float)i);
-
-	roots = lpc_to_lsp(ak, lsp, 5);
+	roots = lpc_to_lsp(ak, lsp); // hardcoded to 5 bisections
 	if (roots != LPC_ORD)
 	{
 		/* if root finding fails use some benign LSP values instead */
-		for (i = 0; i < LPC_ORD; i++)
+		for (int i = 0; i < LPC_ORD; i++)
 			lsp[i] = (M_PI / LPC_ORD) * (float)i;
 	}
 
-	return E;
+	*energy = E;
+
+	return (E >= 0.0f) ? 0 : 1;
 }
 
 int encode_energy(float e, int bits)
@@ -1760,7 +1746,7 @@ void codec2_encode(codec2_t *c2, uint8_t *bits, const int16_t *speech)
 	Wo_index = encode_Wo(model.Wo, WO_BITS);
 	pack(bits, &nbit, Wo_index, WO_BITS);
 
-	e = speech_to_uq_lsps(lsps, ak, c2->Sn, c2->w);
+	speech_to_uq_lsps(lsps, ak, &e, c2->Sn, c2->w);
 	e_index = encode_energy(e, E_BITS);
 	pack(bits, &nbit, e_index, E_BITS);
 
