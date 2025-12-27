@@ -64,6 +64,7 @@
 
 #define LPCPF_GAMMA 0.5
 #define LPCPF_BETA 0.2
+#define LPCPF_TWO_BETA (2.0 * LPCPF_BETA)
 #define LSP_DELTA1 0.01 /* grid spacing for LSP root searches */
 #define BG_THRESH 40.0	/* only consider low levels signals for bg_est */
 #define BG_BETA 0.1		/* averaging filter constant                   */
@@ -1267,32 +1268,32 @@ void lsp_to_lpc(float *lsp, float *ak)
 	}
 }
 
-void lpc_post_filter(kiss_fftr_cfg fftr_fwd_cfg, float *Pw, float *ak,
-					 float beta, float gamma,
-					 int bass_boost, float E)
+void lpc_post_filter(codec2_t *c2,
+					 float *Pw,
+					 float *ak,
+					 int bass_boost,
+					 float E)
 {
-	int i;
-	float x[FFT_ENC];			   /* input to FFTs                */
 	complex_t Ww[FFT_ENC / 2 + 1]; /* weighting spectrum           */
 	float Rw[FFT_ENC / 2 + 1];	   /* R = WA                       */
 	float e_before, e_after, gain;
-	float Pfw;
 	float max_Rw, min_Rw;
-	float coeff;
 
 	/* Determine weighting filter spectrum W(exp(jw)) ---------------*/
-	memset(x, 0, sizeof(x));
+	float *x = (float *)c2->fft_buffer;
+	memset(x, 0, FFT_ENC * sizeof(float));
 
 	x[0] = ak[0];
-	coeff = gamma;
-	for (i = 1; i <= LPC_ORD; i++)
+	float coeff = LPCPF_GAMMA;
+	for (int i = 1; i <= LPC_ORD; i++)
 	{
 		x[i] = ak[i] * coeff;
-		coeff *= gamma;
+		coeff *= LPCPF_GAMMA;
 	}
-	kiss_fftr(fftr_fwd_cfg, x, Ww);
 
-	for (i = 0; i < FFT_ENC / 2; i++)
+	kiss_fftr(c2->fftr_fwd_cfg, x, Ww);
+
+	for (int i = 0; i < FFT_ENC / 2; i++)
 	{
 		Ww[i].r = Ww[i].r * Ww[i].r + Ww[i].i * Ww[i].i;
 	}
@@ -1300,7 +1301,7 @@ void lpc_post_filter(kiss_fftr_cfg fftr_fwd_cfg, float *Pw, float *ak,
 	/* Determined combined filter R = WA ---------------------------*/
 	max_Rw = 0.0;
 	min_Rw = 1E32;
-	for (i = 0; i < FFT_ENC / 2; i++)
+	for (int i = 0; i < FFT_ENC / 2; i++)
 	{
 		Rw[i] = sqrtf(Ww[i].r * Pw[i]);
 		if (Rw[i] > max_Rw)
@@ -1312,32 +1313,31 @@ void lpc_post_filter(kiss_fftr_cfg fftr_fwd_cfg, float *Pw, float *ak,
 	/* create post filter mag spectrum and apply ------------------*/
 	/* measure energy before post filtering */
 	e_before = 1E-4;
-	for (i = 0; i < FFT_ENC / 2; i++)
+	for (int i = 0; i < FFT_ENC / 2; i++)
 		e_before += Pw[i];
 
 	/* apply post filter and measure energy  */
 	e_after = 1E-4;
-	for (i = 0; i < FFT_ENC / 2; i++)
+	for (int i = 0; i < FFT_ENC / 2; i++)
 	{
-		Pfw = powf(Rw[i], beta);
-		Pw[i] *= Pfw * Pfw;
+		Pw[i] *= expf(LPCPF_TWO_BETA * logf(Rw[i] + 1e-12f));
 		e_after += Pw[i];
 	}
 	gain = e_before / e_after;
 
 	/* apply gain factor to normalise energy, and LPC Energy */
 	gain *= E;
-	for (i = 0; i < FFT_ENC / 2; i++)
+	for (int i = 0; i < FFT_ENC / 2; i++)
 	{
 		Pw[i] *= gain;
 	}
 
 	if (bass_boost)
 	{
-		/* add 3dB to first 1 kHz to account for LP effect of PF */
-		for (i = 0; i < FFT_ENC / 8; i++)
+		/* add a slight boost to first 1 kHz to account for LP effect of PF */
+		for (int i = 0; i < FFT_ENC / 8; i++)
 		{
-			Pw[i] *= 1.4 * 1.4;
+			Pw[i] *= 1.9327956f; //this value seems to maximize ViSQOL MOS
 		}
 	}
 }
@@ -1350,8 +1350,6 @@ void aks_to_mag2(codec2_t *c2,
 				 int sim_pf,	 /* true to simulate a post filter */
 				 int pf,		 /* true to enable actual LPC post filter */
 				 int bass_boost, /* enable LPC filter 0-1kHz 3dB boost */
-				 float beta,	 /* LPC post filter parameters */
-				 float gamma,	 /* LPC post filter parameters */
 				 complex_t *Aw	 /* output power spectrum */
 )
 {
@@ -1382,7 +1380,7 @@ void aks_to_mag2(codec2_t *c2,
 	}
 
 	if (pf)
-		lpc_post_filter(c2->fftr_fwd_cfg, Pw, ak, beta, gamma, bass_boost, E);
+		lpc_post_filter(c2, Pw, ak, bass_boost, E);
 	else
 	{
 		for (i = 0; i < FFT_ENC / 2; i++)
@@ -1759,7 +1757,7 @@ void codec2_decode(codec2_t *c2, int16_t *speech, const uint8_t *bits)
 	{
 		lsp_to_lpc(&lsps[i][0], &ak[i][0]);
 		aks_to_mag2(c2, &ak[i][0], &model[i], e[i], &snr, 0,
-					c2->lpc_pf, c2->bass_boost, c2->beta, c2->gamma, Aw);
+					c2->lpc_pf, c2->bass_boost, Aw);
 		apply_lpc_correction(&model[i]);
 		synthesise_one_frame(c2, &speech[N_SAMP * i], &model[i], Aw, 1.0f);
 	}
