@@ -9,8 +9,6 @@ The initial goal of this work was to:
 
 Bit-exactness with the reference Codec2 encoder has been verified using identical input signals and byte-for-byte comparison of encoded frames.
 
----
-
 ## Motivation and goals
 
 Once a minimal, bit-exact baseline is established, the planned next steps include:
@@ -24,7 +22,17 @@ Once a minimal, bit-exact baseline is established, the planned next steps includ
 
 This project is **not** intended to be a drop-in replacement for Codec2, but rather a controlled experimental platform derived from it.
 
----
+## Branches
+
+The `main` branch offers an encoder that is bitstream-compatible with vanilla Codec2 3200 bps mode.
+The meaning, width, ordering, and allocation of all bit fields in the 3200 bps frame are all preserved, so bitstreams produced
+by this encoder can be decoded by an unmodified Codec2 decoder (and vice versa).
+
+The internal DSP implementation, floating-point operations, and decoded audio
+signals are not required to be identical to the reference implementation.
+
+Other branches may introduce experimental DSP changes (e.g. post-filters,
+quantizers, or excitation models), potentially with a modified bitstream format.
 
 ## Important notice: derivative work
 
@@ -39,8 +47,6 @@ Large portions of the code, algorithms, constants, and overall design originate 
 All original credit for the Codec2 design, algorithms, and implementation belongs to David Rowe and the Codec2 contributors.
 
 This repository exists to study, understand, and experimentally extend the Codec2 3200 bps mode.
-
----
 
 ## License
 
