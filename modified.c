@@ -22,6 +22,9 @@
 #define POW10F(x) powf(10.0f, (x))
 #endif
 
+#define BYTES_PER_FRAME 8
+#define SAMPLES_PER_FRAME (2 * N_SAMP)
+
 #define N_S 0.01   /* internal proc frame length in secs   */
 #define MAX_AMP 80 /* maximum number of harmonics          */
 
@@ -69,6 +72,7 @@
 #define BG_THRESH 40.0	/* only consider low levels signals for bg_est */
 #define BG_BETA 0.1		/* averaging filter constant                   */
 #define BG_MARGIN 6.0
+#define LPC_ENERGY_FLOOR 1e-6f
 
 /* FFT stuff */
 #define FFT_R (TWO_PI / FFT_ENC) /* radians/bin */
@@ -84,6 +88,7 @@
 /* asserts */
 /* this is the exact Codec2 3200 bps configuration */
 /* changing any of these parameters requires DSP math modification and buffer resizing */
+_Static_assert(BYTES_PER_FRAME == 8, "Codec2 3200 only");
 _Static_assert(LPC_ORD == 10, "Codec2 3200 assumes LPC_ORD == 10");
 _Static_assert(MAX_AMP >= 80, "MAX_AMP must be >= 80 for Codec2 3200");
 _Static_assert(FFT_ENC == 512, "Codec2 3200 assumes FFT_ENC == 512");
@@ -289,15 +294,20 @@ static inline float fast_atan2f(float y, float x)
 
 static void estimate_amplitudes(model_t *model, const complex_t *Sw, int est_phase)
 {
-	int am, bm; /* bounds of current harmonic */
-	float den;	/* denominator of amplitude expression */
-
 	for (int m = 1; m <= model->L; m++)
 	{
 		/* Estimate ampltude of harmonic */
-		den = 0.0f;
-		am = (int)((m - 0.5f) * model->Wo * FFT_1_R + 0.5f);
-		bm = (int)((m + 0.5f) * model->Wo * FFT_1_R + 0.5f);
+		float den = 0.0f; /* denominator of amplitude expression */
+
+		/* bounds of current harmonic */
+		int am = (int)((m - 0.5f) * model->Wo * FFT_1_R + 0.5f);
+		int bm = (int)((m + 0.5f) * model->Wo * FFT_1_R + 0.5f);
+
+		// clamp
+		if (am < 0)
+			am = 0;
+		if (bm > FFT_ENC / 2)
+			bm = FFT_ENC / 2;
 
 		for (int i = am; i < bm; i++)
 		{
@@ -310,6 +320,8 @@ static void estimate_amplitudes(model_t *model, const complex_t *Sw, int est_pha
 		if (est_phase && model->voiced)
 		{
 			int b = (int)(m * model->Wo / FFT_R + 0.5); /* DFT bin of centre of current harmonic */
+			if (b >= FFT_ENC / 2)
+				b = FFT_ENC / 2 - 1;
 
 			/* Estimate phase of harmonic, this is expensive in CPU for
 			   embedded devices, so we make it an option */
@@ -361,7 +373,8 @@ static float post_process_sub_multiples(complex_t *Fw, float gmax, int gmax_bin,
 
 		if (lmax > thresh)
 		{
-			if ((lmax > Fw[lmax_bin - 1].r) && (lmax > Fw[lmax_bin + 1].r))
+			if (lmax_bin > 0 && lmax_bin < (PE_FFT_SIZE / 2) &&
+				lmax > Fw[lmax_bin - 1].r && lmax > Fw[lmax_bin + 1].r)
 			{
 				cmax_bin = lmax_bin;
 			}
@@ -479,16 +492,22 @@ static float est_voicing_mbe(model_t *restrict model, const complex_t *restrict 
 		Am.r = 0.0;
 		Am.i = 0.0;
 		den = 0.0;
+
 		int al = ceilf((l - 0.5) * Wo * FFT_ENC / TWO_PI);
 		int bl = ceilf((l + 0.5) * Wo * FFT_ENC / TWO_PI);
 
 		/* Estimate amplitude of harmonic assuming harmonic is totally voiced */
 		offset = FFT_ENC / 2 - l * Wo * FFT_ENC / TWO_PI + 0.5;
+
 		for (int m = al; m < bl; m++)
 		{
-			Am.r += Sw[m].r * W[offset + m];
-			Am.i += Sw[m].i * W[offset + m];
-			den += W[offset + m] * W[offset + m];
+			int idx = offset + m;
+			if ((unsigned)idx < FFT_ENC)
+			{
+				Am.r += Sw[m].r * W[idx];
+				Am.i += Sw[m].i * W[idx];
+				den += W[idx] * W[idx];
+			}
 		}
 
 		Am.r = Am.r / den;
@@ -842,24 +861,26 @@ static void phase_synth_zero_order(
 
 static void ear_protection(float *in_out, int n)
 {
-	float max_sample;
+	float max_abs = 0.0f;
 
 	/* find maximum sample in frame */
-	max_sample = 0.0;
 	for (int i = 0; i < n; i++)
-		if (in_out[i] > max_sample)
-			max_sample = in_out[i];
+	{
+		float tmp = fabsf(in_out[i]);
+		if (tmp > max_abs)
+			max_abs = tmp;
+	}
 
-	if (max_sample <= 30000.0f)
+	if (max_abs <= 30000.0f)
 		return; // nothing to do here
 
 	/* determine how far above set point */
-	float over = max_sample / 30000.0;
+	float over = max_abs / 30000.0;
 
 	/* If we are x dB over set point we reduce level by 2x dB, this
 	   attenuates major excursions in amplitude (likely to be caused
 	   by bit errors) more than smaller ones */
-	if (over > 1.0)
+	if (over > 1.0f)
 	{
 		float gain = 1.0f / (over * over);
 		for (int i = 0; i < n; i++)
@@ -1385,7 +1406,7 @@ static float speech_to_uq_lsps(codec2_t *c2, float *restrict lsp, float *restric
 	}
 
 	/* trap 0 energy case as LPC analysis will fail */
-	if (e == 0.0f)
+	if (e < LPC_ENERGY_FLOOR)
 	{
 		for (int i = 0; i < LPC_ORD; i++)
 			lsp[i] = (M_PI / LPC_ORD) * (float)i;
@@ -1672,7 +1693,7 @@ void codec2_encode(codec2_t *c2, uint8_t *bits, const int16_t *speech)
 	int i;
 	unsigned int nbit = 0;
 
-	memset(bits, 0, 8); // 64 bits
+	memset(bits, 0, BYTES_PER_FRAME); // 64 bits
 
 	/* first 10ms analysis frame - we just want voicing */
 	analyse_one_frame(c2, &model, speech);
@@ -1758,8 +1779,8 @@ int main(void)
 	codec2_t c2;
 	codec2_init(&c2);
 
-	uint8_t encoded[8];
-	int16_t speech[160];
+	uint8_t encoded[BYTES_PER_FRAME];
+	int16_t speech[SAMPLES_PER_FRAME];
 
 	FILE *audio_in, *bitstream, *audio_out;
 
