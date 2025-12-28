@@ -1307,18 +1307,15 @@ void aks_to_mag2(codec2_t *c2,
 				 float *ak,		 /* LPC's */
 				 model_t *model, /* sinusoidal model parameters for this frame */
 				 float E,		 /* energy term */
-				 float *snr,	 /* signal to noise ratio for this frame in dB */
 				 int sim_pf,	 /* true to simulate a post filter */
 				 int pf,		 /* true to enable actual LPC post filter */
 				 int bass_boost, /* enable LPC filter 0-1kHz 3dB boost */
 				 complex_t *Aw,	 /* output power spectrum */
 				 float *A2)
 {
-	int i, m;	/* loop variables */
 	int am, bm; /* limits of current band */
 	float Em;	/* energy in band */
 	float Am;	/* spectral amplitude sample */
-	float signal, noise;
 
 	/* FFT of A(z) */
 	float *a = (float *)c2->fft_buffer;
@@ -1359,7 +1356,7 @@ void aks_to_mag2(codec2_t *c2,
 	/* Determine power spectrum P(w) = E/(A(exp(jw))^2 ------------------------*/
 	float Pw[FFT_ENC / 2];
 
-	for (i = 0; i < FFT_ENC / 2; i++)
+	for (int i = 0; i < FFT_ENC / 2; i++)
 	{
 		Pw[i] = 1.0f / A2[i];
 	}
@@ -1368,7 +1365,7 @@ void aks_to_mag2(codec2_t *c2,
 		lpc_post_filter(Pw, A2, A2g, bass_boost, E);
 	else
 	{
-		for (i = 0; i < FFT_ENC / 2; i++)
+		for (int i = 0; i < FFT_ENC / 2; i++)
 		{
 			Pw[i] *= E;
 		}
@@ -1377,10 +1374,7 @@ void aks_to_mag2(codec2_t *c2,
 	/* Determine magnitudes from P(w) ----------------------------------------*/
 	/* when used just by decoder {A} might be all zeroes so init signal
 	   and noise to prevent log(0) errors */
-	signal = 1E-30;
-	noise = 1E-32;
-
-	for (m = 1; m <= model->L; m++)
+	for (int m = 1; m <= model->L; m++)
 	{
 		am = (int)((m - 0.5) * model->Wo / FFT_R + 0.5);
 		bm = (int)((m + 0.5) * model->Wo / FFT_R + 0.5);
@@ -1396,12 +1390,9 @@ void aks_to_mag2(codec2_t *c2,
 		}
 		Em = 0.0;
 
-		for (i = am; i < bm; i++)
+		for (int i = am; i < bm; i++)
 			Em += Pw[i];
 		Am = sqrtf(Em);
-
-		signal += model->A[m] * model->A[m];
-		noise += (model->A[m] - Am) * (model->A[m] - Am);
 
 		/* This code significantly improves perf of LPC model, in
 		   particular when combined with phase0.  The LPC spectrum tends
@@ -1419,8 +1410,6 @@ void aks_to_mag2(codec2_t *c2,
 		}
 		model->A[m] = Am;
 	}
-
-	*snr = 10.0 * log10f(signal / noise);
 }
 
 void apply_lpc_correction(model_t *model)
@@ -1697,7 +1686,6 @@ void codec2_decode(codec2_t *c2, int16_t *speech, const uint8_t *bits)
 	float lsps[2][LPC_ORD];
 	int Wo_index, e_index;
 	float e[2];
-	float snr;
 	float ak[2][LPC_ORD + 1];
 	int i, j;
 	unsigned int nbit = 0;
@@ -1742,7 +1730,7 @@ void codec2_decode(codec2_t *c2, int16_t *speech, const uint8_t *bits)
 	for (i = 0; i < 2; i++)
 	{
 		lsp_to_lpc(&lsps[i][0], &ak[i][0]);
-		aks_to_mag2(c2, &ak[i][0], &model[i], e[i], &snr, 0,
+		aks_to_mag2(c2, &ak[i][0], &model[i], e[i], 0,
 					c2->lpc_pf, c2->bass_boost, Aw, A2);
 		apply_lpc_correction(&model[i]);
 		synthesise_one_frame(c2, &speech[N_SAMP * i], &model[i], Aw, 1.0f);
