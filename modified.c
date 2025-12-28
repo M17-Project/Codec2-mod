@@ -158,7 +158,7 @@ typedef struct codec2_t
 	kiss_fft_cpx fft_buffer[FFT_ENC]; /* shared FFT scratch */
 } codec2_t;
 
-void make_analysis_window(kiss_fft_cfg fft_fwd_cfg, float *w, float *W)
+static void make_analysis_window(kiss_fft_cfg fft_fwd_cfg, float *w, float *W)
 {
 	complex_t wshift[FFT_ENC] = {0};
 
@@ -194,7 +194,7 @@ void make_analysis_window(kiss_fft_cfg fft_fwd_cfg, float *w, float *W)
 	}
 }
 
-void make_synthesis_window(float *Pn)
+static void make_synthesis_window(float *Pn)
 {
 	int i;
 	float win;
@@ -216,7 +216,7 @@ void make_synthesis_window(float *Pn)
 		Pn[i] = 0.0;
 }
 
-void nlp_init(nlp_t *nlp)
+static void nlp_init(nlp_t *nlp)
 {
 	/* mem_fir must be cleared whenever mem_pos is reset */
 	nlp->mem_pos = 0;
@@ -277,7 +277,7 @@ void codec2_init(codec2_t *c2)
 	nlp_init(&c2->nlp);
 }
 
-void dft_speech(kiss_fft_cfg fft_fwd_cfg, complex_t *Sw, float *Sn, float *w)
+static void dft_speech(kiss_fft_cfg fft_fwd_cfg, complex_t *Sw, const float *Sn, const float *w)
 {
 	memset(Sw, 0, FFT_ENC * sizeof(*Sw));
 
@@ -318,7 +318,7 @@ static inline float fast_atan2f(float y, float x)
 	return (y < 0.0f) ? -angle : angle;
 }
 
-void estimate_amplitudes(model_t *model, complex_t *Sw, int est_phase)
+static void estimate_amplitudes(model_t *model, const complex_t *Sw, int est_phase)
 {
 	int am, bm; /* bounds of current harmonic */
 	float den;	/* denominator of amplitude expression */
@@ -349,7 +349,7 @@ void estimate_amplitudes(model_t *model, complex_t *Sw, int est_phase)
 	}
 }
 
-float post_process_sub_multiples(complex_t *Fw, float gmax, int gmax_bin, float *prev_f0)
+static float post_process_sub_multiples(complex_t *Fw, float gmax, int gmax_bin, float *prev_f0)
 {
 	int min_bin, cmax_bin;
 	int mult;
@@ -406,9 +406,8 @@ float post_process_sub_multiples(complex_t *Fw, float gmax, int gmax_bin, float 
 	return best_f0;
 }
 
-void hs_pitch_refinement(model_t *model, complex_t *Sw, float pmin, float pmax, float pstep)
+static void hs_pitch_refinement(model_t *restrict model, const complex_t *restrict Sw, float pmin, float pmax, float pstep)
 {
-	int m;	   /* loop variable */
 	int b;	   /* bin for current harmonic centre */
 	float E;   /* energy for current pitch*/
 	float Wo;  /* current "test" fundamental freq. */
@@ -431,12 +430,13 @@ void hs_pitch_refinement(model_t *model, complex_t *Sw, float pmin, float pmax, 
 		float currentBFloat = bFloat;
 
 		/* Sum harmonic magnitudes */
-		for (m = 1; m <= model->L; m++)
+		for (int m = 1; m <= model->L; m++)
 		{
 			b = (int)(currentBFloat + 0.5);
 			E += Sw[b].r * Sw[b].r + Sw[b].i * Sw[b].i;
 			currentBFloat += bFloat;
 		}
+
 		/* Compare to see if this is a maximum */
 		if (E > Em)
 		{
@@ -448,7 +448,7 @@ void hs_pitch_refinement(model_t *model, complex_t *Sw, float pmin, float pmax, 
 	model->Wo = Wom;
 }
 
-void two_stage_pitch_refinement(model_t *model, complex_t *Sw)
+static void two_stage_pitch_refinement(model_t *restrict model, const complex_t *restrict Sw)
 {
 	float pmin, pmax, pstep; /* pitch refinement minimum, maximum and step */
 
@@ -479,24 +479,24 @@ void two_stage_pitch_refinement(model_t *model, complex_t *Sw)
 	}
 }
 
-float est_voicing_mbe(model_t *model, complex_t *Sw, float *W)
+static float est_voicing_mbe(model_t *restrict model, const complex_t *restrict Sw, const float *restrict W)
 {
-	int l, al, bl, m; /* loop variables */
-	complex_t Am;	  /* amplitude sample for this band */
-	int offset;		  /* centers Hw[] about current harmonic */
-	float den;		  /* denominator of Am expression */
-	float error;	  /* accumulated error between original and synthesised */
+	complex_t Am; /* amplitude sample for this band */
+	int offset;	  /* centers Hw[] about current harmonic */
+	float den;	  /* denominator of Am expression */
+	float error;  /* accumulated error between original and synthesised */
 	float Wo;
 	float sig, snr;
 	float elow, ehigh, eratio;
 	float sixty;
 	complex_t Ew;
+
 	Ew.r = 0;
 	Ew.i = 0;
 
 	int l_1000hz = model->L * 1000.0 / (SAMP_RATE / 2);
 	sig = 1E-4;
-	for (l = 1; l <= l_1000hz; l++)
+	for (int l = 1; l <= l_1000hz; l++)
 	{
 		sig += model->A[l] * model->A[l];
 	}
@@ -505,17 +505,17 @@ float est_voicing_mbe(model_t *model, complex_t *Sw, float *W)
 	error = 1E-4;
 
 	/* Just test across the harmonics in the first 1000 Hz */
-	for (l = 1; l <= l_1000hz; l++)
+	for (int l = 1; l <= l_1000hz; l++)
 	{
 		Am.r = 0.0;
 		Am.i = 0.0;
 		den = 0.0;
-		al = ceilf((l - 0.5) * Wo * FFT_ENC / TWO_PI);
-		bl = ceilf((l + 0.5) * Wo * FFT_ENC / TWO_PI);
+		int al = ceilf((l - 0.5) * Wo * FFT_ENC / TWO_PI);
+		int bl = ceilf((l + 0.5) * Wo * FFT_ENC / TWO_PI);
 
 		/* Estimate amplitude of harmonic assuming harmonic is totally voiced */
 		offset = FFT_ENC / 2 - l * Wo * FFT_ENC / TWO_PI + 0.5;
-		for (m = al; m < bl; m++)
+		for (int m = al; m < bl; m++)
 		{
 			Am.r += Sw[m].r * W[offset + m];
 			Am.i += Sw[m].i * W[offset + m];
@@ -526,7 +526,7 @@ float est_voicing_mbe(model_t *model, complex_t *Sw, float *W)
 		Am.i = Am.i / den;
 
 		/* Determine error between estimated harmonic and original */
-		for (m = al; m < bl; m++)
+		for (int m = al; m < bl; m++)
 		{
 			Ew.r = Sw[m].r - Am.r * W[offset + m];
 			Ew.i = Sw[m].i - Am.i * W[offset + m];
@@ -551,11 +551,11 @@ float est_voicing_mbe(model_t *model, complex_t *Sw, float *W)
 	int l_2000hz = model->L * 2000.0f / (SAMP_RATE / 2);
 	int l_4000hz = model->L * 4000.0f / (SAMP_RATE / 2);
 	elow = ehigh = 1E-4;
-	for (l = 1; l <= l_2000hz; l++)
+	for (int l = 1; l <= l_2000hz; l++)
 	{
 		elow += model->A[l] * model->A[l];
 	}
-	for (l = l_2000hz; l <= l_4000hz; l++)
+	for (int l = l_2000hz; l <= l_4000hz; l++)
 	{
 		ehigh += model->A[l] * model->A[l];
 	}
@@ -587,12 +587,12 @@ float est_voicing_mbe(model_t *model, complex_t *Sw, float *W)
 	return snr;
 }
 
-float nlp(
+static float nlp(
 	nlp_t *restrict nlp,
-	float *restrict Sn,		/* input speech vector */
-	int n,					/* frames shift (no. new samples in Sn[])             */
-	float *restrict pitch,	/* estimated pitch period in samples at current Fs    */
-	float *restrict prev_f0 /* previous pitch f0 in Hz, memory for pitch tracking */
+	const float *restrict Sn, /* input speech vector */
+	int n,					  /* frames shift (no. new samples in Sn[])             */
+	float *restrict pitch,	  /* estimated pitch period in samples at current Fs    */
+	float *restrict prev_f0	  /* previous pitch f0 in Hz, memory for pitch tracking */
 )
 {
 	float notch;					  /* current notch filter output          */
@@ -709,8 +709,10 @@ float nlp(
 	return (best_f0);
 }
 
-void sample_phase(model_t *model, complex_t *H,
-				  complex_t *A /* LPC analysis filter in freq domain */
+static void sample_phase(
+	const model_t *restrict model,
+	complex_t *restrict H,
+	const complex_t *restrict A /* LPC analysis filter in freq domain */
 )
 {
 	/* Sample phase at harmonics */
@@ -724,13 +726,13 @@ void sample_phase(model_t *model, complex_t *H,
 	}
 }
 
-int codec2_rand(unsigned long *prng_state)
+static inline int codec2_rand(unsigned long *prng_state)
 {
 	*prng_state = *prng_state * 1103515245 + 12345;
 	return ((unsigned)(*prng_state / 65536) % 32768);
 }
 
-void postfilter(codec2_t *c2, model_t *model, float *bg_est)
+static void postfilter(codec2_t *restrict c2, model_t *restrict model, float *restrict bg_est)
 {
 	/* determine average energy across spectrum */
 	float e = 1E-12;
@@ -751,29 +753,32 @@ void postfilter(codec2_t *c2, model_t *model, float *bg_est)
 	int uv = 0;
 	float thresh = POW10F((*bg_est + BG_MARGIN) / 20.0f);
 	if (model->voiced)
+	{
 		for (int m = 1; m <= model->L; m++)
+		{
 			if (model->A[m] < thresh)
 			{
 				model->phi[m] = (TWO_PI / CODEC2_RAND_MAX) * (float)codec2_rand(&c2->next_rn);
 				uv++;
 			}
+		}
+	}
 }
 
-void synthesise(kiss_fftr_cfg fftr_inv_cfg,
-				float *Sn_,		/* time domain synthesised signal              */
-				model_t *model, /* ptr to model parameters for this frame      */
-				float *Pn,		/* time domain Parzen window                   */
-				int shift		/* flag used to handle transition frames       */
+static void synthesise(kiss_fftr_cfg fftr_inv_cfg,
+					   float *Sn_,					  /* time domain synthesised signal              */
+					   const model_t *restrict model, /* ptr to model parameters for this frame      */
+					   const float *restrict Pn,	  /* time domain Parzen window                   */
+					   int shift					  /* flag used to handle transition frames       */
 )
 {
-	int i, l, j, b;					/* loop variables */
 	complex_t Sw_[FFT_DEC / 2 + 1]; /* DFT of synthesised signal */
 	float sw_[FFT_DEC];				/* synthesised signal */
 
 	if (shift)
 	{
 		/* Update memories */
-		for (i = 0; i < N_SAMP - 1; i++)
+		for (int i = 0; i < N_SAMP - 1; i++)
 		{
 			Sn_[i] = Sn_[i + N_SAMP];
 		}
@@ -783,9 +788,9 @@ void synthesise(kiss_fftr_cfg fftr_inv_cfg,
 	memset(Sw_, 0, sizeof(Sw_));
 
 	/* Now set up frequency domain synthesised speech */
-	for (l = 1; l <= model->L; l++)
+	for (int l = 1; l <= model->L; l++)
 	{
-		b = (int)(l * model->Wo * FFT_DEC / TWO_PI + 0.5);
+		int b = (int)(l * model->Wo * FFT_DEC / TWO_PI + 0.5);
 		if (b > ((FFT_DEC / 2) - 1))
 		{
 			b = (FFT_DEC / 2) - 1;
@@ -798,20 +803,20 @@ void synthesise(kiss_fftr_cfg fftr_inv_cfg,
 	kiss_fftri(fftr_inv_cfg, Sw_, sw_);
 
 	/* Overlap add to previous samples */
-	for (i = 0; i < N_SAMP - 1; i++)
+	for (int i = 0; i < N_SAMP - 1; i++)
 	{
 		Sn_[i] += sw_[FFT_DEC - N_SAMP + 1 + i] * Pn[i];
 	}
 
 	if (shift)
-		for (i = N_SAMP - 1, j = 0; i < 2 * N_SAMP; i++, j++)
+		for (int i = N_SAMP - 1, j = 0; i < 2 * N_SAMP; i++, j++)
 			Sn_[i] = sw_[j] * Pn[i];
 	else
-		for (i = N_SAMP - 1, j = 0; i < 2 * N_SAMP; i++, j++)
+		for (int i = N_SAMP - 1, j = 0; i < 2 * N_SAMP; i++, j++)
 			Sn_[i] += sw_[j] * Pn[i];
 }
 
-void phase_synth_zero_order(
+static void phase_synth_zero_order(
 	codec2_t *c2,
 	model_t *model,
 	float *ex_phase, /* excitation phase of fundamental        */
@@ -864,7 +869,7 @@ void phase_synth_zero_order(
 	}
 }
 
-void ear_protection(float *in_out, int n)
+static void ear_protection(float *in_out, int n)
 {
 	float max_sample, over, gain;
 	int i;
@@ -889,7 +894,7 @@ void ear_protection(float *in_out, int n)
 	}
 }
 
-void analyse_one_frame(codec2_t *c2, model_t *model, const int16_t *speech)
+static void analyse_one_frame(codec2_t *c2, model_t *model, const int16_t *speech)
 {
 	complex_t Sw[FFT_ENC];
 	float pitch;
@@ -916,8 +921,12 @@ void analyse_one_frame(codec2_t *c2, model_t *model, const int16_t *speech)
 	est_voicing_mbe(model, Sw, c2->W);
 }
 
-void synthesise_one_frame(codec2_t *c2, int16_t *speech, model_t *model,
-						  complex_t *Aw, float gain)
+static void synthesise_one_frame(
+	codec2_t *c2,
+	int16_t *speech,
+	model_t *model,
+	const complex_t *Aw,
+	float gain)
 {
 	int i;
 
@@ -946,7 +955,7 @@ void synthesise_one_frame(codec2_t *c2, int16_t *speech, model_t *model,
 	}
 }
 
-void pack(
+static void pack(
 	uint8_t *bitArray,		/* The output bit array. */
 	unsigned int *bitIndex, /* Index into the string in BITS, not bytes.*/
 	unsigned int field,		/* The bit field to be packed. */
@@ -971,7 +980,7 @@ void pack(
 	} while (fieldWidth != 0);
 }
 
-int unpack(
+static int unpack(
 	const uint8_t *bitArray, /* The input bit string. */
 	unsigned int *bitIndex,	 /* Index into the string in BITS, not bytes.*/
 	unsigned int fieldWidth	 /* Width of the field in BITS, not bytes. */
@@ -1011,7 +1020,7 @@ int unpack(
 	return t;
 }
 
-int encode_Wo(float Wo, uint8_t bits)
+static int encode_Wo(float Wo, uint8_t bits)
 {
 	int index, Wo_levels = 1 << bits;
 	float norm;
@@ -1026,7 +1035,7 @@ int encode_Wo(float Wo, uint8_t bits)
 	return index;
 }
 
-float decode_Wo(int index, int bits)
+static float decode_Wo(int index, int bits)
 {
 	float step;
 	float Wo;
@@ -1038,8 +1047,9 @@ float decode_Wo(int index, int bits)
 	return Wo;
 }
 
-void autocorrelate(float *Sn, /* frame of Nsam windowed speech samples */
-				   float *Rn  /* array of P+1 autocorrelation coefficients */
+static void autocorrelate(
+	const float *restrict Sn, /* frame of Nsam windowed speech samples */
+	float *restrict Rn		  /* array of P+1 autocorrelation coefficients */
 )
 {
 	for (int j = 0; j < LPC_ORD + 1; j++)
@@ -1050,8 +1060,9 @@ void autocorrelate(float *Sn, /* frame of Nsam windowed speech samples */
 	}
 }
 
-void levinson_durbin(const float *restrict R, /* order+1 autocorrelation coeff */
-					 float *restrict lpcs	  /* order+1 LPC's */
+static void levinson_durbin(
+	const float *restrict R, /* order+1 autocorrelation coeff */
+	float *restrict lpcs	 /* order+1 LPC's */
 )
 {
 	float a[LPC_ORD + 1];
@@ -1095,7 +1106,7 @@ void levinson_durbin(const float *restrict R, /* order+1 autocorrelation coeff *
 /*  float x   		the point where polynomial is to be evaluated 	*/
 /*  int order 		order of the polynomial 			            */
 /*  NOTE: this function uses fully unrolled loop for LPC_ORD=10     */
-inline float cheb_poly_eva(float *coef, float x)
+static inline float cheb_poly_eva(const float *restrict coef, float x)
 {
 	_Static_assert(LPC_ORD == 10, "cheb_poly_eva() assumes LPC_ORD=10");
 
@@ -1129,7 +1140,7 @@ inline float cheb_poly_eva(float *coef, float x)
 /*  float *a 		     	lpc coefficients			*/
 /*  float *freq 	      	LSP frequencies in radians  */
 /*  NOTE: This function uses 6 bisections       		*/
-int lpc_to_lsp(float *a, float *freq)
+static int lpc_to_lsp(const float *a, float *freq)
 {
 	float psuml, psumr, psumm, xl, xr, xm;
 	int i, j, m;
@@ -1231,7 +1242,7 @@ int lpc_to_lsp(float *a, float *freq)
 
 /*  float *freq         array of LSP frequencies in radians    */
 /*  float *ak 		    array of LPC coefficients 			   */
-void lsp_to_lpc(const float *restrict lsp, float *restrict ak)
+static void lsp_to_lpc(const float *restrict lsp, float *restrict ak)
 {
 	float xout1, xout2, xin1, xin2;
 	float *n1, *n2, *n3, *n4 = 0;
@@ -1281,12 +1292,12 @@ void lsp_to_lpc(const float *restrict lsp, float *restrict ak)
 	}
 }
 
-void aks_to_mag2(codec2_t *c2,
-				 float *ak,		 /* LPC's */
-				 model_t *model, /* sinusoidal model parameters for this frame */
-				 float E,		 /* energy term */
-				 complex_t *Aw,	 /* output power spectrum */
-				 float *A2)
+static void aks_to_mag2(codec2_t *c2,
+						const float *ak, /* LPCs */
+						model_t *model,	 /* sinusoidal model parameters for this frame */
+						float E,		 /* energy term */
+						complex_t *Aw,	 /* output power spectrum */
+						float *A2)
 {
 	int am, bm; /* limits of current band */
 
@@ -1377,7 +1388,7 @@ void aks_to_mag2(codec2_t *c2,
 	}
 }
 
-void apply_lpc_correction(model_t *model)
+static void apply_lpc_correction(model_t *model)
 {
 	if (model->Wo < (M_PI * 150.0f / 4000.0f))
 	{
@@ -1385,7 +1396,7 @@ void apply_lpc_correction(model_t *model)
 	}
 }
 
-float speech_to_uq_lsps(float *restrict lsp, float *restrict ak, float *restrict energy, const float *restrict Sn, const float *restrict w)
+static float speech_to_uq_lsps(float *restrict lsp, float *restrict ak, float *restrict energy, const float *restrict Sn, const float *restrict w)
 {
 	int roots;
 	float Wn[M_PITCH];
@@ -1404,6 +1415,8 @@ float speech_to_uq_lsps(float *restrict lsp, float *restrict ak, float *restrict
 	{
 		for (int i = 0; i < LPC_ORD; i++)
 			lsp[i] = (M_PI / LPC_ORD) * (float)i;
+			
+		*energy = 0.0f;
 		return 0.0f;
 	}
 
@@ -1436,7 +1449,7 @@ float speech_to_uq_lsps(float *restrict lsp, float *restrict ak, float *restrict
 	return (E >= 0.0f) ? 0 : 1;
 }
 
-int encode_energy(float e, int bits)
+static int encode_energy(float e, int bits)
 {
 	int index, e_levels = 1 << bits;
 	float e_min = E_MIN_DB;
@@ -1454,7 +1467,7 @@ int encode_energy(float e, int bits)
 	return index;
 }
 
-float decode_energy(int index, int bits)
+static float decode_energy(int index, int bits)
 {
 	float step;
 	float e;
@@ -1467,11 +1480,11 @@ float decode_energy(int index, int bits)
 	return e;
 }
 
-/* float   *cb;	current VQ codebook		*/
-/* float   *vec;	vector to quantise		*/
-/* float   *w;         weighting vector                */
+/* float   *cb;	    current VQ codebook		    */
+/* float   *vec;	vector to quantise		    */
+/* float   *w;      weighting vector            */
 /* float   *se;		accumulated squared error 	*/
-long quantise(const float *cb, float *vec, float *w, float *se)
+static long quantise(const float *cb, float *vec, float *w, float *se)
 {
 	float e;	 /* current error		*/
 	long besti;	 /* best index so far		*/
@@ -1502,7 +1515,7 @@ long quantise(const float *cb, float *vec, float *w, float *se)
 	return (besti);
 }
 
-void encode_lspds_scalar(uint16_t *indexes, float *lsp)
+static void encode_lspds_scalar(uint16_t *indexes, float *lsp)
 {
 	int i;
 	float lsp_hz[LPC_ORD];
@@ -1543,7 +1556,7 @@ void encode_lspds_scalar(uint16_t *indexes, float *lsp)
 	}
 }
 
-void decode_lspds_scalar(float *lsp_, int *indexes)
+static void decode_lspds_scalar(float *lsp_, const int *indexes)
 {
 	int i;
 	float lsp__hz[LPC_ORD];
@@ -1564,9 +1577,9 @@ void decode_lspds_scalar(float *lsp_, int *indexes)
 	}
 }
 
-void interp_Wo(model_t *interp, /* interpolated model params */
-			   model_t *prev,	/* previous frames model params                  */
-			   model_t *next	/* next frames model params                      */
+static void interp_Wo(model_t *interp, /* interpolated model params */
+					  model_t *prev,   /* previous frames model params                  */
+					  model_t *next	   /* next frames model params                      */
 )
 {
 	const float weight = 0.5f;
@@ -1595,13 +1608,12 @@ void interp_Wo(model_t *interp, /* interpolated model params */
 	interp->L = M_PI / interp->Wo;
 }
 
-float interp_energy(float prev_e, float next_e)
+static inline float interp_energy(float prev_e, float next_e)
 {
-	// return powf(10.0, (log10f(prev_e) + log10f(next_e))/2.0);
 	return sqrtf(prev_e * next_e);
 }
 
-void interpolate_lsp(float *interp, float *prev, float *next)
+static void interpolate_lsp(float *interp, float *prev, float *next)
 {
 	const float weight = 0.5f;
 	int i;
