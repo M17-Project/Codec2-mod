@@ -1018,46 +1018,53 @@ void autocorrelate(float *Sn, /* frame of Nsam windowed speech samples */
 				   float *Rn  /* array of P+1 autocorrelation coefficients */
 )
 {
-	int i, j; /* loop variables */
-
-	for (j = 0; j < LPC_ORD + 1; j++)
+	for (int j = 0; j < LPC_ORD + 1; j++)
 	{
 		Rn[j] = 0.0;
-		for (i = 0; i < M_PITCH - j; i++)
+		for (int i = 0; i < M_PITCH - j; i++)
 			Rn[j] += Sn[i] * Sn[i + j];
 	}
 }
 
-void levinson_durbin(float *R,	 /* order+1 autocorrelation coeff */
-					 float *lpcs /* order+1 LPC's */
+void levinson_durbin(const float *restrict R, /* order+1 autocorrelation coeff */
+					 float *restrict lpcs	  /* order+1 LPC's */
 )
 {
-	float a[LPC_ORD + 1][LPC_ORD + 1];
-	float sum, e, k;
-	int i, j; /* loop variables */
+	float a[LPC_ORD + 1];
+	float a_prev[LPC_ORD + 1];
+	float e, k, sum;
 
-	e = R[0]; /* Equation 38a, Makhoul */
+	/* a[0] = 1 by definition */
+	a[0] = 1.0f;
+	e = R[0];
 
-	for (i = 1; i <= LPC_ORD; i++)
+	for (int i = 1; i <= LPC_ORD; i++)
 	{
-		sum = 0.0;
-		for (j = 1; j <= i - 1; j++)
-			sum += a[i - 1][j] * R[i - j];
-		k = -1.0 * (R[i] + sum) / e; /* Equation 38b, Makhoul */
-		if (fabsf(k) > 1.0)
-			k = 0.0;
+		sum = 0.0f;
+		for (int j = 1; j <= i - 1; j++)
+			sum += a_prev[j] * R[i - j];
 
-		a[i][i] = k;
+		k = -(R[i] + sum) / e;
 
-		for (j = 1; j <= i - 1; j++)
-			a[i][j] = a[i - 1][j] + k * a[i - 1][i - j]; /* Equation 38c, Makhoul */
+		if (fabsf(k) > 1.0f)
+			k = 0.0f;
 
-		e *= (1 - k * k); /* Equation 38d, Makhoul */
+		a[i] = k;
+
+		for (int j = 1; j <= i - 1; j++)
+			a[j] = a_prev[j] + k * a_prev[i - j];
+
+		e *= (1.0f - k * k);
+
+		/* copy for next iteration */
+		for (int j = 1; j <= i; j++)
+			a_prev[j] = a[j];
 	}
 
-	for (i = 1; i <= LPC_ORD; i++)
-		lpcs[i] = a[LPC_ORD][i];
-	lpcs[0] = 1.0;
+	/* output LPCs */
+	lpcs[0] = 1.0f;
+	for (int i = 1; i <= LPC_ORD; i++)
+		lpcs[i] = a[i];
 }
 
 /*  float coef[]  	coefficients of the polynomial to be evaluated 	*/
@@ -1206,7 +1213,7 @@ void lsp_to_lpc(float *lsp, float *ak)
 	float xout1, xout2, xin1, xin2;
 	float *pw, *n1, *n2, *n3, *n4 = 0;
 	float freq[LPC_ORD];
-	float Wp[(LPC_ORD * 4) + 2];
+	float Wp[2 * LPC_ORD + 2];
 
 	/* convert from radians to the x=cos(w) domain */
 	for (i = 0; i < LPC_ORD; i++)
@@ -1215,10 +1222,7 @@ void lsp_to_lpc(float *lsp, float *ak)
 	pw = Wp;
 
 	/* initialise contents of array */
-	for (i = 0; i <= 4 * (LPC_ORD / 2) + 1; i++)
-	{ /* set contents of buffer to 0 */
-		*pw++ = 0.0;
-	}
+	memset(Wp, 0, sizeof(Wp));
 
 	/* Set pointers up */
 	pw = Wp;
