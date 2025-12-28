@@ -77,6 +77,10 @@
 /* random number generator stuff */
 #define CODEC2_RAND_MAX 32767
 
+/* KissFFT - measured values for FFT FFT_ENC/FFT_DEC/PE_FFT_SIZE sizes */
+#define FFT_FWD_MEM_BYTES 4360
+#define FFTR_MEM_BYTES 5408
+
 /* asserts */
 /* this is the exact Codec2 3200 bps configuration */
 /* changing any of these parameters requires DSP math modification and buffer resizing */
@@ -85,7 +89,6 @@ _Static_assert(MAX_AMP >= 80, "MAX_AMP must be >= 80 for Codec2 3200");
 _Static_assert(FFT_ENC == 512, "Codec2 3200 assumes FFT_ENC == 512");
 _Static_assert(FFT_DEC == FFT_ENC, "Encoder/decoder FFT sizes must match");
 _Static_assert(PE_FFT_SIZE == 512, "Pitch estimator FFT size must be 512");
-_Static_assert((PE_FFT_SIZE & 1) == 0, "Real FFT requires even PE_FFT_SIZE");
 _Static_assert((M_PITCH % DEC) == 0, "M_PITCH must be divisible by DEC");
 _Static_assert(NDEC == (M_PITCH / DEC), "NDEC must equal M_PITCH / DEC");
 _Static_assert(NLP_NTAP == 48, "NLP FIR unrolling assumes NLP_NTAP == 48");
@@ -171,6 +174,10 @@ typedef struct codec2_t
 	kiss_fft_cfg phase_fft_fwd_cfg;
 	kiss_fft_cfg phase_fft_inv_cfg;
 	kiss_fft_cpx fft_buffer[FFT_ENC]; /* shared FFT scratch */
+
+	uint8_t fft_fwd_mem[FFT_FWD_MEM_BYTES];
+	uint8_t fftr_fwd_mem[FFTR_MEM_BYTES];
+	uint8_t fftr_inv_mem[FFTR_MEM_BYTES];
 } codec2_t;
 
 _Static_assert(sizeof(((codec2_t *)0)->fft_buffer) >= FFT_ENC * sizeof(kiss_fft_cpx), "fft_buffer too small for FFT_ENC scratch");
@@ -231,65 +238,6 @@ static void make_synthesis_window(float *Pn)
 		Pn[i] = win;
 	for (i = 3.0f * N_SAMP / 2.0f + TW; i < 2 * N_SAMP; i++)
 		Pn[i] = 0.0;
-}
-
-static void nlp_init(nlp_t *nlp)
-{
-	/* mem_fir must be cleared whenever mem_pos is reset */
-	nlp->mem_pos = 0;
-	memset(nlp->mem_fir, 0, sizeof(nlp->mem_fir));
-
-	for (int i = 0; i < NDEC; i++)
-	{
-		nlp->w[i] = 0.5 - 0.5 * cosf(TWO_PI * i / (NDEC - 1));
-	}
-
-	memset(nlp->sq, 0, sizeof(nlp->sq));
-
-	nlp->mem_x = 0.0;
-	nlp->mem_y = 0.0;
-
-	nlp->fftr_cfg = kiss_fftr_alloc(PE_FFT_SIZE, 0, NULL, NULL);
-}
-
-void codec2_init(codec2_t *c2)
-{
-	c2->next_rn = 1; // random number geterator - seed
-
-	for (int i = 0; i < M_PITCH; i++)
-		c2->Sn[i] = 1.0f;
-
-	c2->hpf_states[0] = c2->hpf_states[1] = 0.0;
-
-	memset(c2->Sn_, 0, sizeof(c2->Sn_));
-
-	c2->fft_fwd_cfg = kiss_fft_alloc(FFT_ENC, 0, NULL, NULL);
-	c2->fftr_fwd_cfg = kiss_fftr_alloc(FFT_ENC, 0, NULL, NULL);
-
-	make_analysis_window(c2->fft_fwd_cfg, c2->w, c2->W);
-	make_synthesis_window(c2->Pn);
-
-	c2->fftr_inv_cfg = kiss_fftr_alloc(FFT_DEC, 1, NULL, NULL);
-	c2->prev_f0_enc = 1.0f / P_MAX_S;
-	c2->bg_est = 0.0;
-	c2->ex_phase = 0.0;
-
-	for (int l = 1; l <= MAX_AMP; l++)
-		c2->prev_model_dec.A[l] = 0.0;
-
-	c2->prev_model_dec.Wo = TWO_PI / P_MAX;
-	c2->prev_model_dec.L = M_PI / c2->prev_model_dec.Wo;
-	c2->prev_model_dec.voiced = 0;
-	memset(c2->prev_model_dec.phi, 0, sizeof(c2->prev_model_dec.phi));
-	c2->ex_phase = 0.0f;
-
-	for (int i = 0; i < LPC_ORD; i++)
-	{
-		c2->prev_lsps_dec[i] = i * M_PI / (LPC_ORD + 1);
-	}
-	c2->prev_e_dec = 1;
-
-	nlp_init(&c2->nlp);
 }
 
 static void dft_speech(kiss_fft_cfg fft_fwd_cfg, complex_t *Sw, const float *Sn, const float *w)
@@ -1635,6 +1583,77 @@ static void interpolate_lsp(float *interp, float *prev, float *next)
 		interp[i] = (1.0 - weight) * prev[i] + weight * next[i];
 }
 
+static void nlp_init(nlp_t *nlp)
+{
+	/* mem_fir must be cleared whenever mem_pos is reset */
+	nlp->mem_pos = 0;
+	memset(nlp->mem_fir, 0, sizeof(nlp->mem_fir));
+
+	for (int i = 0; i < NDEC; i++)
+	{
+		nlp->w[i] = 0.5 - 0.5 * cosf(TWO_PI * i / (NDEC - 1));
+	}
+
+	memset(nlp->sq, 0, sizeof(nlp->sq));
+
+	nlp->mem_x = 0.0;
+	nlp->mem_y = 0.0;
+}
+
+void codec2_init(codec2_t *c2)
+{
+	c2->next_rn = 1; // random number geterator - seed
+
+	for (int i = 0; i < M_PITCH; i++)
+		c2->Sn[i] = 1.0f;
+
+	c2->hpf_states[0] = c2->hpf_states[1] = 0.0;
+
+	memset(c2->Sn_, 0, sizeof(c2->Sn_));
+
+	/* static FFT mem allocations */
+	size_t mem;
+
+	/* FFT forward */
+	mem = sizeof(c2->fft_fwd_mem);
+	c2->fft_fwd_cfg = kiss_fft_alloc(FFT_ENC, 0, c2->fft_fwd_mem, &mem);
+
+	/* FFT real forward */
+	mem = sizeof(c2->fftr_fwd_mem);
+	c2->fftr_fwd_cfg = kiss_fftr_alloc(FFT_ENC, 0, c2->fftr_fwd_mem, &mem);
+
+	/* FFT real inverse */
+	mem = sizeof(c2->fftr_inv_mem);
+	c2->fftr_inv_cfg = kiss_fftr_alloc(FFT_DEC, 1, c2->fftr_inv_mem, &mem);
+
+	/* NLP FFT - reused (same type, direction, and size) */
+	c2->nlp.fftr_cfg = c2->fftr_fwd_cfg;
+
+	make_analysis_window(c2->fft_fwd_cfg, c2->w, c2->W);
+	make_synthesis_window(c2->Pn);
+
+	c2->prev_f0_enc = 1.0f / P_MAX_S;
+	c2->bg_est = 0.0;
+	c2->ex_phase = 0.0;
+
+	for (int l = 1; l <= MAX_AMP; l++)
+		c2->prev_model_dec.A[l] = 0.0;
+
+	c2->prev_model_dec.Wo = TWO_PI / P_MAX;
+	c2->prev_model_dec.L = M_PI / c2->prev_model_dec.Wo;
+	c2->prev_model_dec.voiced = 0;
+	memset(c2->prev_model_dec.phi, 0, sizeof(c2->prev_model_dec.phi));
+	c2->ex_phase = 0.0f;
+
+	for (int i = 0; i < LPC_ORD; i++)
+	{
+		c2->prev_lsps_dec[i] = i * M_PI / (LPC_ORD + 1);
+	}
+	c2->prev_e_dec = 1;
+
+	nlp_init(&c2->nlp);
+}
+
 void codec2_encode(codec2_t *c2, uint8_t *bits, const int16_t *speech)
 {
 	model_t model;
@@ -1770,8 +1789,8 @@ int main(void)
 	double elapsed_ms = sec * 1e3 + nsec * 1e-6;
 	fprintf(stderr, "Elapsed time: %.3f ms\n", elapsed_ms);
 
-	bitstream = fopen("../../modified_bitstream.bin", "rb");
 	codec2_init(&c2);
+	bitstream = fopen("../../modified_bitstream.bin", "rb");
 
 	while (fread(encoded, 8, 1, bitstream) == 1)
 	{

@@ -49,11 +49,11 @@ int main(void)
 		nsec += 1000000000L;
 	}
 	double elapsed_ms = sec * 1e3 + nsec * 1e-6;
+	codec2_destroy(c2);
 	fprintf(stderr, "Elapsed time: %.3f ms\n", elapsed_ms);
 
-	bitstream = fopen("../../reference_bitstream.bin", "rb");
-	codec2_destroy(c2);
 	c2 = codec2_create(CODEC2_MODE_3200);
+	bitstream = fopen("../../reference_bitstream.bin", "rb");
 
 	while (fread(encoded, 8, 1, bitstream) == 1)
 	{
