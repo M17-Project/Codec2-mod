@@ -36,7 +36,8 @@ quantizers, or excitation models), potentially with a modified bitstream format.
 
 ## Important notice: derivative work
 
-**This is a derivative work.**
+> [!NOTE]
+> **This is a derivative work.**
 
 This code is based heavily and directly on the Codec2 speech codec by venerable David Rowe, VK5DGR<sup>[1](https://github.com/drowe67) [2](https://www.qrz.com/db/VK5DGR)</sup> et al.
 
