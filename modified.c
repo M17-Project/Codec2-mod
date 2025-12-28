@@ -174,6 +174,13 @@ typedef struct codec2_t
 	kiss_fft_cfg phase_fft_inv_cfg;
 	kiss_fft_cpx fft_buffer[FFT_ENC]; /* shared FFT scratch */
 
+	/*
+	 * fft_buffer scratch usage:
+	 * - only one logical use at a time
+	 * - no overlapping lifetimes
+	 * - sizes are semantic (FFT_ENC, FFT_DEC)
+	 * Violating this will cause silent DSP corruption.
+	 */
 	uint8_t fft_fwd_mem[FFT_FWD_MEM_BYTES];
 	uint8_t fftr_fwd_mem[FFTR_MEM_BYTES];
 	uint8_t fftr_inv_mem[FFTR_MEM_BYTES];
@@ -1352,7 +1359,8 @@ static void aks_to_mag2(codec2_t *c2,
 }
 
 /* Apply first harmonic LPC correction at decoder.
-   This helps improve low pitch males after LPC modelling. */
+   This helps improve low pitch males after LPC modelling.
+   Original value used by David Rowe: 0.032 */
 static void apply_lpc_correction(model_t *model)
 {
 	if (model->Wo < (M_PI * 150.0f / 4000.0f))
@@ -1382,6 +1390,8 @@ static float speech_to_uq_lsps(codec2_t *c2, float *restrict lsp, float *restric
 		for (int i = 0; i < LPC_ORD; i++)
 			lsp[i] = (M_PI / LPC_ORD) * (float)i;
 
+		memset(ak, 0, (LPC_ORD + 1) * sizeof(float));
+		ak[0] = 1.0f;
 		*energy = 0.0f;
 		return 0.0f;
 	}
@@ -1446,13 +1456,14 @@ static float decode_energy(int index, int bits)
 	return e;
 }
 
-/* float   *cb;	    current VQ codebook		    */
-/* float   *vec;	vector to quantise		    */
-/* float   *w;      weighting vector            */
-/* float   *se;		accumulated squared error 	*/
-static long quantise(const float *cb, float *vec, float *w, float *se)
+static uint8_t quantise(
+	const float *cb, /* current VQ codebook */
+	float *vec,		 /* vector to quantise */
+	float *w,		 /* weighting vector */
+	float *se		 /* accumulated squared error */
+)
 {
-	float e; /* current error		    */
+	float e; /* current error */
 	float diff;
 
 	float besti = 0;	/* best index so far */
@@ -1686,7 +1697,7 @@ void codec2_encode(codec2_t *c2, uint8_t *bits, const int16_t *speech)
 
 void codec2_decode(codec2_t *c2, int16_t *speech, const uint8_t *bits)
 {
-	model_t model[2];
+	model_t model[2] = {0};
 	int lspd_indexes[LPC_ORD];
 	float lsps[2][LPC_ORD];
 	int Wo_index, e_index;
@@ -1694,11 +1705,6 @@ void codec2_decode(codec2_t *c2, int16_t *speech, const uint8_t *bits)
 	float ak[2][LPC_ORD + 1];
 	complex_t Aw[FFT_ENC];
 	float A2[FFT_ENC / 2];
-
-	/* only need to zero these out due to (unused) snr calculation */
-	for (int i = 0; i < 2; i++)
-		for (int j = 1; j <= MAX_AMP; j++)
-			model[i].A[j] = 0.0;
 
 	/* unpack bits from channel ------------------------------------*/
 	unsigned int nbit = 0;
