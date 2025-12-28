@@ -707,6 +707,11 @@ static void sample_phase(
 	for (int m = 1; m <= model->L; m++)
 	{
 		int b = (int)(m * model->Wo / FFT_R + 0.5);
+
+		// clamp b
+		if (b >= FFT_ENC / 2)
+			b = FFT_ENC / 2 - 1;
+
 		/* synth filter 1/A is opposite phase to analysis filter */
 		// H[m] = cconj(A[b]);
 		H[m].r = A[b].r;
