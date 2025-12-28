@@ -157,7 +157,6 @@ typedef struct codec2_t
 	float W[FFT_ENC];	  /* DFT of w[]                                */
 	float Pn[2 * N_SAMP]; /* [2*n_samp] trapezoidal synthesis window   */
 	float Sn[M_PITCH];	  /* [m_pitch] input speech                    */
-	float hpf_states[2];  /* high pass filter states                   */
 	nlp_t nlp;			  /* pitch predictor states                    */
 
 	float Sn_[2 * N_SAMP];		  /* [2*n_samp] synthesised output speech      */
@@ -713,8 +712,8 @@ static void postfilter(codec2_t *restrict c2, model_t *restrict model, float *re
 	/* now mess with phases during voiced frames to make any harmonics
 	   less then our background estimate unvoiced.
 	*/
-	int uv = 0;
 	float thresh = POW10F((*bg_est + BG_MARGIN) / 20.0f);
+
 	if (model->voiced)
 	{
 		for (int m = 1; m <= model->L; m++)
@@ -722,7 +721,6 @@ static void postfilter(codec2_t *restrict c2, model_t *restrict model, float *re
 			if (model->A[m] < thresh)
 			{
 				model->phi[m] = (TWO_PI / CODEC2_RAND_MAX) * (float)codec2_rand(&c2->next_rn);
-				uv++;
 			}
 		}
 	}
@@ -1606,8 +1604,6 @@ void codec2_init(codec2_t *c2)
 
 	for (int i = 0; i < M_PITCH; i++)
 		c2->Sn[i] = 1.0f;
-
-	c2->hpf_states[0] = c2->hpf_states[1] = 0.0;
 
 	memset(c2->Sn_, 0, sizeof(c2->Sn_));
 
