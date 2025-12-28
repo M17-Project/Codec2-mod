@@ -150,15 +150,13 @@ typedef struct codec2_t
 	float prev_lsps_dec[LPC_ORD]; /* previous frame's LSPs                     */
 	float prev_e_dec;			  /* previous frame's LPC energy               */
 
-	int lpc_pf;		/* LPC post filter on                        */
-	int bass_boost; /* LPC post filter bass boost                */
-
 	kiss_fft_cfg fft_fwd_cfg;	/* forward FFT config                        */
 	kiss_fftr_cfg fftr_fwd_cfg; /* forward real FFT config                   */
 	kiss_fftr_cfg fftr_inv_cfg; /* inverse FFT config                        */
 	kiss_fft_cfg phase_fft_fwd_cfg;
 	kiss_fft_cfg phase_fft_inv_cfg;
-	kiss_fft_cpx fft_buffer[FFT_ENC];
+	kiss_fft_cpx fft_buffer[FFT_ENC]; /* shared FFT scratch */
+	float Pw[FFT_ENC / 2];			  /* LPC power spectrum scratch */
 } codec2_t;
 
 void make_analysis_window(kiss_fft_cfg fft_fwd_cfg, float *w, float *W)
@@ -278,9 +276,6 @@ void codec2_init(codec2_t *c2)
 	c2->prev_e_dec = 1;
 
 	nlp_init(&c2->nlp);
-
-	c2->lpc_pf = 1;
-	c2->bass_boost = 1;
 }
 
 void dft_speech(kiss_fft_cfg fft_fwd_cfg, complex_t *Sw, float *Sn, float *w)
@@ -714,12 +709,9 @@ int codec2_rand(unsigned long *prng_state)
 
 void postfilter(codec2_t *c2, model_t *model, float *bg_est)
 {
-	int m, uv;
-	float e, thresh;
-
 	/* determine average energy across spectrum */
-	e = 1E-12;
-	for (m = 1; m <= model->L; m++)
+	float e = 1E-12;
+	for (int m = 1; m <= model->L; m++)
 		e += model->A[m] * model->A[m];
 
 	e = 10.0 * log10f(e / model->L);
@@ -733,10 +725,10 @@ void postfilter(codec2_t *c2, model_t *model, float *bg_est)
 	/* now mess with phases during voiced frames to make any harmonics
 	   less then our background estimate unvoiced.
 	*/
-	uv = 0;
-	thresh = POW10F((*bg_est + BG_MARGIN) / 20.0);
+	int uv = 0;
+	float thresh = POW10F((*bg_est + BG_MARGIN) / 20.0f);
 	if (model->voiced)
-		for (m = 1; m <= model->L; m++)
+		for (int m = 1; m <= model->L; m++)
 			if (model->A[m] < thresh)
 			{
 				model->phi[m] = (TWO_PI / CODEC2_RAND_MAX) * (float)codec2_rand(&c2->next_rn);
@@ -1267,7 +1259,6 @@ void lsp_to_lpc(float *lsp, float *ak)
 void lpc_post_filter(float *Pw,
 					 const float *A2,
 					 const float *A2g,
-					 int bass_boost,
 					 float E)
 {
 	float e_before = 1E-4;
@@ -1281,7 +1272,7 @@ void lpc_post_filter(float *Pw,
 	for (int i = 0; i < FFT_ENC / 2; i++)
 	{
 		float R = sqrtf(A2g[i] / A2[i]);
-		Pw[i] *= expf(LPCPF_TWO_BETA * logf(R));
+		Pw[i] *= expf(LPCPF_TWO_BETA * logf(R + 1e-12f));
 		e_after += Pw[i];
 	}
 
@@ -1293,13 +1284,10 @@ void lpc_post_filter(float *Pw,
 		Pw[i] *= gain;
 	}
 
-	if (bass_boost)
+	/* add a slight boost to first 1 kHz to account for LP effect of PF */
+	for (int i = 0; i < FFT_ENC / 8; i++)
 	{
-		/* add a slight boost to first 1 kHz to account for LP effect of PF */
-		for (int i = 0; i < FFT_ENC / 8; i++)
-		{
-			Pw[i] *= 1.9327956f; // this value seems to maximize ViSQOL MOS
-		}
+		Pw[i] *= 1.9327956f; // this value seems to maximize ViSQOL MOS
 	}
 }
 
@@ -1307,9 +1295,6 @@ void aks_to_mag2(codec2_t *c2,
 				 float *ak,		 /* LPC's */
 				 model_t *model, /* sinusoidal model parameters for this frame */
 				 float E,		 /* energy term */
-				 int sim_pf,	 /* true to simulate a post filter */
-				 int pf,		 /* true to enable actual LPC post filter */
-				 int bass_boost, /* enable LPC filter 0-1kHz 3dB boost */
 				 complex_t *Aw,	 /* output power spectrum */
 				 float *A2)
 {
@@ -1344,32 +1329,27 @@ void aks_to_mag2(codec2_t *c2,
 	}
 
 	/* FFT of A_gamma */
-	complex_t Awg[FFT_ENC / 2 + 1];
+	complex_t *Awg = c2->fft_buffer; /* reuse FFT scratch */
 	kiss_fftr(c2->fftr_fwd_cfg, ag, Awg);
 
-	float A2g[FFT_ENC / 2];
+	/* reuse Awg storage for A2g */
+	float *A2g = (float *)Awg;
+
 	for (int i = 0; i < FFT_ENC / 2; i++)
 	{
 		A2g[i] = Awg[i].r * Awg[i].r + Awg[i].i * Awg[i].i + 1e-6f;
 	}
 
 	/* Determine power spectrum P(w) = E/(A(exp(jw))^2 ------------------------*/
-	float Pw[FFT_ENC / 2];
+	float *Pw = c2->Pw;
 
 	for (int i = 0; i < FFT_ENC / 2; i++)
 	{
 		Pw[i] = 1.0f / A2[i];
 	}
 
-	if (pf)
-		lpc_post_filter(Pw, A2, A2g, bass_boost, E);
-	else
-	{
-		for (int i = 0; i < FFT_ENC / 2; i++)
-		{
-			Pw[i] *= E;
-		}
-	}
+	/* apply post filter */
+	lpc_post_filter(Pw, A2, A2g, E);
 
 	/* Determine magnitudes from P(w) ----------------------------------------*/
 	/* when used just by decoder {A} might be all zeroes so init signal
@@ -1392,22 +1372,8 @@ void aks_to_mag2(codec2_t *c2,
 
 		for (int i = am; i < bm; i++)
 			Em += Pw[i];
-		Am = sqrtf(Em);
 
-		/* This code significantly improves perf of LPC model, in
-		   particular when combined with phase0.  The LPC spectrum tends
-		   to track just under the peaks of the spectral envelope, and
-		   just above nulls.  This algorithm does the reverse to
-		   compensate - raising the amplitudes of spectral peaks, while
-		   attenuating the null.  This enhances the formants, and
-		   suppresses the energy between formants. */
-		if (sim_pf)
-		{
-			if (Am > model->A[m])
-				Am *= 0.7;
-			if (Am < model->A[m])
-				Am *= 1.4;
-		}
+		Am = sqrtf(Em);
 		model->A[m] = Am;
 	}
 }
@@ -1687,18 +1653,16 @@ void codec2_decode(codec2_t *c2, int16_t *speech, const uint8_t *bits)
 	int Wo_index, e_index;
 	float e[2];
 	float ak[2][LPC_ORD + 1];
-	int i, j;
-	unsigned int nbit = 0;
 	complex_t Aw[FFT_ENC];
 	float A2[FFT_ENC / 2];
 
 	/* only need to zero these out due to (unused) snr calculation */
-	for (i = 0; i < 2; i++)
-		for (j = 1; j <= MAX_AMP; j++)
+	for (int i = 0; i < 2; i++)
+		for (int j = 1; j <= MAX_AMP; j++)
 			model[i].A[j] = 0.0;
 
 	/* unpack bits from channel ------------------------------------*/
-
+	unsigned int nbit = 0;
 	/* this will partially fill the model params for the 2 x 10ms
 	   frames */
 	model[0].voiced = unpack(bits, &nbit, 1);
@@ -1711,7 +1675,7 @@ void codec2_decode(codec2_t *c2, int16_t *speech, const uint8_t *bits)
 	e_index = unpack(bits, &nbit, E_BITS);
 	e[1] = decode_energy(e_index, E_BITS);
 
-	for (i = 0; i < LSPD_SCALAR_INDEXES; i++)
+	for (int i = 0; i < LSPD_SCALAR_INDEXES; i++)
 	{
 		lspd_indexes[i] = unpack(bits, &nbit, 5); // codebook indices are 5 bits
 	}
@@ -1727,11 +1691,10 @@ void codec2_decode(codec2_t *c2, int16_t *speech, const uint8_t *bits)
 	   between, then recover spectral amplitudes */
 	interpolate_lsp(&lsps[0][0], c2->prev_lsps_dec, &lsps[1][0]);
 
-	for (i = 0; i < 2; i++)
+	for (int i = 0; i < 2; i++)
 	{
 		lsp_to_lpc(&lsps[i][0], &ak[i][0]);
-		aks_to_mag2(c2, &ak[i][0], &model[i], e[i], 0,
-					c2->lpc_pf, c2->bass_boost, Aw, A2);
+		aks_to_mag2(c2, &ak[i][0], &model[i], e[i], Aw, A2);
 		apply_lpc_correction(&model[i]);
 		synthesise_one_frame(c2, &speech[N_SAMP * i], &model[i], Aw, 1.0f);
 	}
@@ -1739,7 +1702,7 @@ void codec2_decode(codec2_t *c2, int16_t *speech, const uint8_t *bits)
 	/* update memories for next frame ----------------------------*/
 	c2->prev_model_dec = model[1];
 	c2->prev_e_dec = e[1];
-	for (i = 0; i < LPC_ORD; i++)
+	for (int i = 0; i < LPC_ORD; i++)
 		c2->prev_lsps_dec[i] = lsps[1][i];
 }
 
