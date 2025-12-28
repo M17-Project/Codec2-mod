@@ -156,7 +156,6 @@ typedef struct codec2_t
 	kiss_fft_cfg phase_fft_fwd_cfg;
 	kiss_fft_cfg phase_fft_inv_cfg;
 	kiss_fft_cpx fft_buffer[FFT_ENC]; /* shared FFT scratch */
-	float Pw[FFT_ENC / 2];			  /* LPC power spectrum scratch */
 } codec2_t;
 
 void make_analysis_window(kiss_fft_cfg fft_fwd_cfg, float *w, float *W)
@@ -1256,41 +1255,6 @@ void lsp_to_lpc(float *lsp, float *ak)
 	}
 }
 
-void lpc_post_filter(float *Pw,
-					 const float *A2,
-					 const float *A2g,
-					 float E)
-{
-	float e_before = 1E-4;
-	float e_after = 1E-4;
-
-	/* measure energy before post filtering */
-	for (int i = 0; i < FFT_ENC / 2; i++)
-		e_before += Pw[i];
-
-	/* R(w) = |A_gamma| / |A| */
-	for (int i = 0; i < FFT_ENC / 2; i++)
-	{
-		float R = sqrtf(A2g[i] / A2[i]);
-		Pw[i] *= expf(LPCPF_TWO_BETA * logf(R + 1e-12f));
-		e_after += Pw[i];
-	}
-
-	/* normalise energy and apply LPC energy */
-	float gain = e_before / e_after * E;
-
-	for (int i = 0; i < FFT_ENC / 2; i++)
-	{
-		Pw[i] *= gain;
-	}
-
-	/* add a slight boost to first 1 kHz to account for LP effect of PF */
-	for (int i = 0; i < FFT_ENC / 8; i++)
-	{
-		Pw[i] *= 1.9327956f; // this value seems to maximize ViSQOL MOS
-	}
-}
-
 void aks_to_mag2(codec2_t *c2,
 				 float *ak,		 /* LPC's */
 				 model_t *model, /* sinusoidal model parameters for this frame */
@@ -1299,8 +1263,6 @@ void aks_to_mag2(codec2_t *c2,
 				 float *A2)
 {
 	int am, bm; /* limits of current band */
-	float Em;	/* energy in band */
-	float Am;	/* spectral amplitude sample */
 
 	/* FFT of A(z) */
 	float *a = (float *)c2->fft_buffer;
@@ -1340,41 +1302,52 @@ void aks_to_mag2(codec2_t *c2,
 		A2g[i] = Awg[i].r * Awg[i].r + Awg[i].i * Awg[i].i + 1e-6f;
 	}
 
-	/* Determine power spectrum P(w) = E/(A(exp(jw))^2 ------------------------*/
-	float *Pw = c2->Pw;
+	/* compute normalization gain */
+	float e_before = 1e-12f;
+	float e_after = 1e-12f;
 
 	for (int i = 0; i < FFT_ENC / 2; i++)
 	{
-		Pw[i] = 1.0f / A2[i];
+		float invA2 = 1.0f / A2[i];
+		float R = sqrtf(A2g[i] * invA2);
+
+		e_before += invA2;
+		e_after += invA2 * expf(LPCPF_TWO_BETA * logf(R + 1e-5f));
 	}
 
-	/* apply post filter */
-	lpc_post_filter(Pw, A2, A2g, E);
+	float gain = E * e_before / e_after;
 
-	/* Determine magnitudes from P(w) ----------------------------------------*/
-	/* when used just by decoder {A} might be all zeroes so init signal
-	   and noise to prevent log(0) errors */
+	/* Determine magnitudes */
 	for (int m = 1; m <= model->L; m++)
 	{
-		am = (int)((m - 0.5) * model->Wo / FFT_R + 0.5);
-		bm = (int)((m + 0.5) * model->Wo / FFT_R + 0.5);
+		am = (int)((m - 0.5f) * model->Wo / FFT_R + 0.5f);
+		bm = (int)((m + 0.5f) * model->Wo / FFT_R + 0.5f);
 
-		// FIXME: With arm_rfft_fast_f32 we have to use this
-		// otherwise sometimes a to high bm is calculated
-		// which causes trouble later in the calculation
-		// chain
-		// it seems for some reason model->Wo is calculated somewhat too high
 		if (bm > FFT_ENC / 2)
-		{
 			bm = FFT_ENC / 2;
-		}
-		Em = 0.0;
+
+		float Em = 0.0f;
 
 		for (int i = am; i < bm; i++)
-			Em += Pw[i];
+		{
+			/* R(w) = |A_gamma| / |A| */
+			float R = sqrtf(A2g[i] / A2[i]);
 
-		Am = sqrtf(Em);
-		model->A[m] = Am;
+			/* Pw contribution */
+			float Pw_i = expf(LPCPF_TWO_BETA * logf(R + 1e-5f)) / A2[i];
+
+			/* boost low frequencies a bit */
+			float freq = i * (SAMP_RATE * 0.5f / (FFT_ENC / 2));
+			if (freq < 1000.0f)
+				Pw_i *= 1.9327954f; // this value seems to maximize ViSQOL
+
+			Em += Pw_i;
+		}
+
+		/* apply LPC energy */
+		Em *= gain;
+
+		model->A[m] = sqrtf(Em);
 	}
 }
 
