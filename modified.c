@@ -77,6 +77,21 @@
 /* random number generator stuff */
 #define CODEC2_RAND_MAX 32767
 
+/* asserts */
+/* this is the exact Codec2 3200 bps configuration */
+/* changing any of these parameters requires DSP math modification and buffer resizing */
+_Static_assert(LPC_ORD == 10, "Codec2 3200 assumes LPC_ORD == 10");
+_Static_assert(MAX_AMP >= 80, "MAX_AMP must be >= 80 for Codec2 3200");
+_Static_assert(FFT_ENC == 512, "Codec2 3200 assumes FFT_ENC == 512");
+_Static_assert(FFT_DEC == FFT_ENC, "Encoder/decoder FFT sizes must match");
+_Static_assert(PE_FFT_SIZE == 512, "Pitch estimator FFT size must be 512");
+_Static_assert((PE_FFT_SIZE & 1) == 0, "Real FFT requires even PE_FFT_SIZE");
+_Static_assert((M_PITCH % DEC) == 0, "M_PITCH must be divisible by DEC");
+_Static_assert(NDEC == (M_PITCH / DEC), "NDEC must equal M_PITCH / DEC");
+_Static_assert(NLP_NTAP == 48, "NLP FIR unrolling assumes NLP_NTAP == 48");
+_Static_assert(WO_BITS <= 8, "encode_Wo() assumes <= 8-bit fields");
+_Static_assert(E_BITS <= 8, "encode_energy() assumes <= 8-bit fields");
+
 /* consts */
 const float nlp_fir[NLP_NTAP] = {
 	-1.0818124e-03, -1.1008344e-03, -9.2768838e-04, -4.2289438e-04,
@@ -158,6 +173,8 @@ typedef struct codec2_t
 	kiss_fft_cpx fft_buffer[FFT_ENC]; /* shared FFT scratch */
 } codec2_t;
 
+_Static_assert(sizeof(((codec2_t *)0)->fft_buffer) >= FFT_ENC * sizeof(kiss_fft_cpx), "fft_buffer too small for FFT_ENC scratch");
+
 static void make_analysis_window(kiss_fft_cfg fft_fwd_cfg, float *w, float *W)
 {
 	complex_t wshift[FFT_ENC] = {0};
@@ -237,8 +254,6 @@ static void nlp_init(nlp_t *nlp)
 
 void codec2_init(codec2_t *c2)
 {
-	_Static_assert(PE_FFT_SIZE % 2 == 0, "PE_FFT_SIZE must be even");
-
 	c2->next_rn = 1; // random number geterator - seed
 
 	for (int i = 0; i < M_PITCH; i++)
@@ -1108,8 +1123,6 @@ static void levinson_durbin(
 /*  NOTE: this function uses fully unrolled loop for LPC_ORD=10     */
 static inline float cheb_poly_eva(const float *restrict coef, float x)
 {
-	_Static_assert(LPC_ORD == 10, "cheb_poly_eva() assumes LPC_ORD=10");
-
 	// N = 5 (LPC_ORD/2)
 	float T0 = 1.0f;
 	float T1 = x;
@@ -1415,7 +1428,7 @@ static float speech_to_uq_lsps(float *restrict lsp, float *restrict ak, float *r
 	{
 		for (int i = 0; i < LPC_ORD; i++)
 			lsp[i] = (M_PI / LPC_ORD) * (float)i;
-			
+
 		*energy = 0.0f;
 		return 0.0f;
 	}
@@ -1486,7 +1499,7 @@ static float decode_energy(int index, int bits)
 /* float   *se;		accumulated squared error 	*/
 static long quantise(const float *cb, float *vec, float *w, float *se)
 {
-	float e;	 /* current error		*/
+	float e;	 /* current error		    */
 	long besti;	 /* best index so far		*/
 	float beste; /* best error so far		*/
 	long j;
