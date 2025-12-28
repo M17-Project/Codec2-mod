@@ -295,6 +295,29 @@ void dft_speech(kiss_fft_cfg fft_fwd_cfg, complex_t *Sw, float *Sn, float *w)
 	kiss_fft(fft_fwd_cfg, Sw, Sw);
 }
 
+/* faster than atan2f(), but approximate (good enough) */
+static inline float fast_atan2f(float y, float x)
+{
+	static const float ONEQTR_PI = M_PI * 0.25f;
+	static const float THRQTR_PI = M_PI * 0.75f;
+
+	float r, angle;
+	float abs_y = fabsf(y) + 1e-12f;
+
+	if (x < 0.0f)
+	{
+		r = (x + abs_y) / (abs_y - x);
+		angle = THRQTR_PI;
+	}
+	else
+	{
+		r = (x - abs_y) / (x + abs_y);
+		angle = ONEQTR_PI;
+	}
+	angle += (0.1963f * r * r - 0.9817f) * r;
+	return (y < 0.0f) ? -angle : angle;
+}
+
 void estimate_amplitudes(model_t *model, complex_t *Sw, int est_phase)
 {
 	int am, bm; /* bounds of current harmonic */
@@ -314,13 +337,14 @@ void estimate_amplitudes(model_t *model, complex_t *Sw, int est_phase)
 
 		model->A[m] = sqrtf(den);
 
-		if (est_phase)
+		/* recompute phases only for voiced speech :-) */
+		if (est_phase && model->voiced)
 		{
 			int b = (int)(m * model->Wo / FFT_R + 0.5); /* DFT bin of centre of current harmonic */
 
 			/* Estimate phase of harmonic, this is expensive in CPU for
-			   embedded devicesso we make it an option */
-			model->phi[m] = atan2f(Sw[b].i, Sw[b].r);
+			   embedded devices, so we make it an option */
+			model->phi[m] = fast_atan2f(Sw[b].i, Sw[b].r);
 		}
 	}
 }
@@ -1205,37 +1229,32 @@ int lpc_to_lsp(float *a, float *freq)
 	return (roots);
 }
 
-/*  float *freq         array of LSP frequencies in radians     	*/
-/*  float *ak 		array of LPC coefficients 			*/
-void lsp_to_lpc(float *lsp, float *ak)
+/*  float *freq         array of LSP frequencies in radians    */
+/*  float *ak 		    array of LPC coefficients 			   */
+void lsp_to_lpc(const float *restrict lsp, float *restrict ak)
 {
-	int i, j;
 	float xout1, xout2, xin1, xin2;
-	float *pw, *n1, *n2, *n3, *n4 = 0;
+	float *n1, *n2, *n3, *n4 = 0;
 	float freq[LPC_ORD];
 	float Wp[2 * LPC_ORD + 2];
 
 	/* convert from radians to the x=cos(w) domain */
-	for (i = 0; i < LPC_ORD; i++)
+	for (int i = 0; i < LPC_ORD; i++)
 		freq[i] = cosf(lsp[i]);
-
-	pw = Wp;
 
 	/* initialise contents of array */
 	memset(Wp, 0, sizeof(Wp));
 
-	/* Set pointers up */
-	pw = Wp;
 	xin1 = 1.0;
 	xin2 = 1.0;
 
 	/* reconstruct P(z) and Q(z) by cascading second order polynomials
 	  in form 1 - 2xz(-1) +z(-2), where x is the LSP coefficient */
-	for (j = 0; j <= LPC_ORD; j++)
+	for (int j = 0; j <= LPC_ORD; j++)
 	{
-		for (i = 0; i < (LPC_ORD / 2); i++)
+		for (int i = 0; i < (LPC_ORD / 2); i++)
 		{
-			n1 = pw + (i * 4);
+			n1 = Wp + (i * 4);
 			n2 = n1 + 1;
 			n3 = n2 + 1;
 			n4 = n3 + 1;
@@ -1248,9 +1267,12 @@ void lsp_to_lpc(float *lsp, float *ak)
 			xin1 = xout1;
 			xin2 = xout2;
 		}
+
 		xout1 = xin1 + *(n4 + 1);
 		xout2 = xin2 - *(n4 + 2);
+
 		ak[j] = (xout1 + xout2) * 0.5;
+
 		*(n4 + 1) = xin1;
 		*(n4 + 2) = xin2;
 
