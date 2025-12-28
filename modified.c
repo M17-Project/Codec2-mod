@@ -180,6 +180,7 @@ typedef struct codec2_t
 } codec2_t;
 
 _Static_assert(sizeof(((codec2_t *)0)->fft_buffer) >= FFT_ENC * sizeof(kiss_fft_cpx), "fft_buffer too small for FFT_ENC scratch");
+_Static_assert(sizeof(((codec2_t *)0)->fft_buffer) >= FFT_ENC * sizeof(complex_t), "fft_buffer insufficient for max scratch use");
 
 static void make_analysis_window(kiss_fft_cfg fft_fwd_cfg, float *w, float *W)
 {
@@ -726,15 +727,18 @@ static void postfilter(codec2_t *restrict c2, model_t *restrict model, float *re
 	}
 }
 
-static void synthesise(kiss_fftr_cfg fftr_inv_cfg,
-					   float *Sn_,					  /* time domain synthesised signal              */
-					   const model_t *restrict model, /* ptr to model parameters for this frame      */
-					   const float *restrict Pn,	  /* time domain Parzen window                   */
-					   int shift					  /* flag used to handle transition frames       */
+static void synthesise(
+	codec2_t *c2,
+	kiss_fftr_cfg fftr_inv_cfg,
+	float *Sn_,					   /* time domain synthesised signal              */
+	const model_t *restrict model, /* ptr to model parameters for this frame      */
+	const float *restrict Pn,	   /* time domain Parzen window                   */
+	int shift					   /* flag used to handle transition frames       */
 )
 {
-	complex_t Sw_[FFT_DEC / 2 + 1]; /* DFT of synthesised signal */
-	float sw_[FFT_DEC];				/* synthesised signal */
+	// NOTE: lifetimes do not overlap
+	complex_t *Sw_ = c2->fft_buffer;	  /* DFT of synthesised signal */
+	float *sw_ = (float *)c2->fft_buffer; /* synthesised signal */
 
 	if (shift)
 	{
@@ -746,7 +750,7 @@ static void synthesise(kiss_fftr_cfg fftr_inv_cfg,
 		Sn_[N_SAMP - 1] = 0.0;
 	}
 
-	memset(Sw_, 0, sizeof(Sw_));
+	memset(Sw_, 0, (FFT_DEC / 2 + 1) * sizeof(complex_t)); // original Sw_ size was this
 
 	/* Now set up frequency domain synthesised speech */
 	for (int l = 1; l <= model->L; l++)
@@ -857,14 +861,13 @@ static void ear_protection(float *in_out, int n)
 
 static void analyse_one_frame(codec2_t *c2, model_t *model, const int16_t *speech)
 {
-	complex_t Sw[FFT_ENC];
+	complex_t *Sw = c2->fft_buffer; // reuse scratch array
 	float pitch;
-	int i;
 
 	/* Read input speech */
-	for (i = 0; i < M_PITCH - N_SAMP; i++)
+	for (int i = 0; i < M_PITCH - N_SAMP; i++)
 		c2->Sn[i] = c2->Sn[i + N_SAMP];
-	for (i = 0; i < N_SAMP; i++)
+	for (int i = 0; i < N_SAMP; i++)
 		c2->Sn[i + M_PITCH - N_SAMP] = speech[i];
 
 	dft_speech(c2->fft_fwd_cfg, Sw, c2->Sn, c2->w);
@@ -892,11 +895,11 @@ static void synthesise_one_frame(
 	int i;
 
 	/* LPC based phase synthesis */
-	complex_t H[MAX_AMP + 1];
+	complex_t *H = (complex_t *)c2->fft_buffer; // use a chunk of that array as scratch
 	sample_phase(model, H, Aw);
 	phase_synth_zero_order(c2, model, &c2->ex_phase, H);
 	postfilter(c2, model, &c2->bg_est);
-	synthesise(c2->fftr_inv_cfg, c2->Sn_, model, c2->Pn, 1);
+	synthesise(c2, c2->fftr_inv_cfg, c2->Sn_, model, c2->Pn, 1);
 
 	for (i = 0; i < N_SAMP; i++)
 	{
@@ -1355,12 +1358,13 @@ static void apply_lpc_correction(model_t *model)
 	}
 }
 
-static float speech_to_uq_lsps(float *restrict lsp, float *restrict ak, float *restrict energy, const float *restrict Sn, const float *restrict w)
+static float speech_to_uq_lsps(codec2_t *c2, float *restrict lsp, float *restrict ak, float *restrict energy, const float *restrict Sn, const float *restrict w)
 {
 	int roots;
-	float Wn[M_PITCH];
 	float R[LPC_ORD + 1];
 	float e, E;
+
+	float *Wn = (float *)c2->fft_buffer;
 
 	e = 0.0;
 	for (int i = 0; i < M_PITCH; i++)
@@ -1673,7 +1677,7 @@ void codec2_encode(codec2_t *c2, uint8_t *bits, const int16_t *speech)
 	Wo_index = encode_Wo(model.Wo, WO_BITS);
 	pack(bits, &nbit, Wo_index, WO_BITS);
 
-	speech_to_uq_lsps(lsps, ak, &e, c2->Sn, c2->w);
+	speech_to_uq_lsps(c2, lsps, ak, &e, c2->Sn, c2->w);
 	e_index = encode_energy(e, E_BITS);
 	pack(bits, &nbit, e_index, E_BITS);
 
