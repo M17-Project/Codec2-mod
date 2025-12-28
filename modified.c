@@ -180,7 +180,6 @@ typedef struct codec2_t
 } codec2_t;
 
 _Static_assert(sizeof(((codec2_t *)0)->fft_buffer) >= FFT_ENC * sizeof(kiss_fft_cpx), "fft_buffer too small for FFT_ENC scratch");
-_Static_assert(sizeof(((codec2_t *)0)->fft_buffer) >= FFT_ENC * sizeof(complex_t), "fft_buffer insufficient for max scratch use");
 
 static void make_analysis_window(kiss_fft_cfg fft_fwd_cfg, float *w, float *W)
 {
@@ -755,7 +754,7 @@ static void synthesise(
 	/* Now set up frequency domain synthesised speech */
 	for (int l = 1; l <= model->L; l++)
 	{
-		int b = (int)(l * model->Wo * FFT_DEC / TWO_PI + 0.5);
+		int b = (int)(l * model->Wo * FFT_1_R + 0.5); // FFT_DEC == FFT_ENC
 		if (b > ((FFT_DEC / 2) - 1))
 		{
 			b = (FFT_DEC / 2) - 1;
@@ -829,32 +828,34 @@ static void phase_synth_zero_order(
 		A_[m].i = H[m].i * Ex[m].r + H[m].r * Ex[m].i;
 
 		/* modify sinusoidal phase */
-		new_phi = atan2f(A_[m].i, A_[m].r + 1E-12);
+		new_phi = fast_atan2f(A_[m].i, A_[m].r + 1E-12);
 		model->phi[m] = new_phi;
 	}
 }
 
 static void ear_protection(float *in_out, int n)
 {
-	float max_sample, over, gain;
-	int i;
+	float max_sample;
 
 	/* find maximum sample in frame */
 	max_sample = 0.0;
-	for (i = 0; i < n; i++)
+	for (int i = 0; i < n; i++)
 		if (in_out[i] > max_sample)
 			max_sample = in_out[i];
 
+	if (max_sample <= 30000.0f)
+		return; // nothing to do here
+
 	/* determine how far above set point */
-	over = max_sample / 30000.0;
+	float over = max_sample / 30000.0;
 
 	/* If we are x dB over set point we reduce level by 2x dB, this
 	   attenuates major excursions in amplitude (likely to be caused
 	   by bit errors) more than smaller ones */
 	if (over > 1.0)
 	{
-		gain = 1.0 / (over * over);
-		for (i = 0; i < n; i++)
+		float gain = 1.0f / (over * over);
+		for (int i = 0; i < n; i++)
 			in_out[i] *= gain;
 	}
 }
@@ -1350,11 +1351,13 @@ static void aks_to_mag2(codec2_t *c2,
 	}
 }
 
+/* Apply first harmonic LPC correction at decoder.
+   This helps improve low pitch males after LPC modelling. */
 static void apply_lpc_correction(model_t *model)
 {
 	if (model->Wo < (M_PI * 150.0f / 4000.0f))
 	{
-		model->A[1] *= 0.032f;
+		model->A[1] *= 0.0338f; // found experimentally for best ViSQOL
 	}
 }
 
@@ -1449,23 +1452,16 @@ static float decode_energy(int index, int bits)
 /* float   *se;		accumulated squared error 	*/
 static long quantise(const float *cb, float *vec, float *w, float *se)
 {
-	float e;	 /* current error		    */
-	long besti;	 /* best index so far		*/
-	float beste; /* best error so far		*/
-	long j;
-	int i;
+	float e; /* current error		    */
 	float diff;
 
-	besti = 0;
-	beste = 1E32;
-	for (j = 0; j < 32; j++)
+	float besti = 0;	/* best index so far */
+	float beste = 1E32; /* best error so far */
+	for (int j = 0; j < 32; j++)
 	{
 		e = 0.0;
-		for (i = 0; i < 1; i++)
-		{
-			diff = cb[j * 1 + i] - vec[i];
-			e += diff * w[i] * diff * w[i]; // powf(diff*w[i],2.0);
-		}
+		diff = cb[j] - vec[0];
+		e = diff * w[0] * diff * w[0];
 		if (e < beste)
 		{
 			beste = e;
@@ -1656,7 +1652,7 @@ void codec2_init(codec2_t *c2)
 
 void codec2_encode(codec2_t *c2, uint8_t *bits, const int16_t *speech)
 {
-	model_t model;
+	model_t model = {0};
 	float ak[LPC_ORD + 1];
 	float lsps[LPC_ORD];
 	float e;
