@@ -18,13 +18,13 @@ The removal of floating point maths was not a goal here.
 > Bit-exact behavior compared to the vanilla Codec2 has been achieved.
 > The `main` branch contains the refactored and optimized implementation while preserving bitstream compatibility.
 > 
-> The removal of floating-point math was not a goal of this work.
+> **The removal of floating-point math was not a goal of this work.**
 
 Planned next steps include:
 - Quantizer experiments (energy, pitch, LSPs)
 - Exploration of improved excitation models
 - Decoder-side enhancements that do not modify the Codec2 bitstream (eg. the use of external neural networks)
-- Fitness for embedded and low-power targets
+- Maintaining fitness for embedded and low-power targets
 
 This fork is intended to be a drop-in replacement for Codec2 when using the 3200 bps mode. It is also a controlled experimental platform derived from it.
 The code structure and memory usage are intentionally designed to suit embedded systems.
