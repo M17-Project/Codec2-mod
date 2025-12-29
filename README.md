@@ -1,31 +1,47 @@
 # Codec2-mod experimental fork
 This repository contains a **minimal extraction of the Codec2's 3200 bps mode**, intended as a clean base for experimentation, optimization, and future research.
+Only the 3200 bps mode is supported - other Codec2 modes were intentionally excluded.
 
 The initial goal of this work was to:
 - Isolate only the functions and data structures actually used by the 3200 bps mode
 - Achieve bit-exact encoder output compared to the reference `libcodec2`
 - Remove unused code paths, state variables, and legacy scaffolding
-- Establish a small codebase suitable for further development
+- Establish a codebase that is as small and optimized as possible, suitable for further development
 
 Bit-exactness with the reference Codec2 encoder has been verified using identical input signals and byte-for-byte comparison of encoded frames.
+Bit-exactness refers to the encoded bitstream - decoded audio samples may differ from the reference implementation.
 
 ## Motivation and goals
 
-Once a minimal, bit-exact baseline is established, the planned next steps include:
+> [!NOTE]
+> Bit-exact behavior compared to the vanilla Codec2 has been achieved.
+> The `main` branch contains the refactored and optimized implementation while preserving bitstream compatibility.
 
-- Removal of unused state and redundant computations
-- Code optimizations
+Planned next steps include:
 - Quantizer experiments (energy, pitch, LSPs)
 - Exploration of improved excitation models
-- Decoder-side enhancements that do not modify the Codec2 bitstream
-- Suitability for embedded and low-power targets
+- Decoder-side enhancements that do not modify the Codec2 bitstream (eg. the use of external neural networks)
+- Fitness for embedded and low-power targets
 
-This project is **not** intended to be a drop-in replacement for Codec2, but rather a controlled experimental platform derived from it.
+This fork is intended to be a drop-in replacement for Codec2 when using the 3200 bps mode. It is also a controlled experimental platform derived from it.
+The code structure and memory usage are intentionally designed to suit embedded systems.
+
+## Current state and implemented changes
+
+Compared to the reference Codec2 implementation, this fork already includes:
+- Complete refactoring of the 3200 bps mode into a small codebase
+- Removal of unused variables, modes, code paths, and legacy state not required for 3200 bps operation
+- Elimination of all persistent dynamic memory allocation (no runtime `malloc`/`free`)
+- Fully deterministic, fixed-size codec state suitable for static allocation
+- Reduced overall memory footprint compared to the reference implementation
+- Verified bitstream compatibility with the reference Codec2 encoder
+
+These changes establish a stable and minimal baseline for further optimization and experimentation.
 
 ## Branches
 
-The `main` branch offers an encoder that is bitstream-compatible with vanilla Codec2 3200 bps mode.
-The meaning, width, ordering, and allocation of all bit fields in the 3200 bps frame are all preserved, so bitstreams produced
+The `main` branch offers an encoder that is bitstream-compatible with the reference Codec2 implementation.
+The meaning, width, ordering, and allocation of all frame bit fields are all preserved. Bitstreams produced
 by this encoder can be decoded by an unmodified Codec2 decoder (and vice versa).
 
 The internal DSP implementation, floating-point operations, and decoded audio
@@ -47,7 +63,7 @@ Original project:
 Large portions of the code, algorithms, constants, and overall design originate from Codec2 and remain recognizably derived from it.  
 All original credit for the Codec2 design, algorithms, and implementation belongs to David Rowe and the Codec2 contributors.
 
-This repository exists to study, understand, and experimentally extend the Codec2 3200 bps mode.
+This repository exists to study, understand, optimize, and experimentally extend the Codec2 3200 bps mode.
 
 ## License
 

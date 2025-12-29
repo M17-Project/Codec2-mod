@@ -6,8 +6,8 @@
  *  See COPYING file for more information.
  */
 
-#include "kiss_fftr.h"
-#include "_kiss_fft_guts.h"
+#include "../inc/kiss_fftr.h"
+#include "../inc/_kiss_fft_guts.h"
 
 struct kiss_fftr_state{
     kiss_fft_cfg substate;
