@@ -10,7 +10,6 @@ The initial goal of this work was to:
 
 Bit-exactness with the reference Codec2 encoder has been verified using identical input signals and byte-for-byte comparison of encoded frames.
 Bit-exactness refers to the encoded bitstream - decoded audio samples may differ from the reference implementation.
-The removal of floating point maths was not a goal here.
 
 ## Motivation and goals
 
