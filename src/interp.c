@@ -49,8 +49,7 @@ void interpolate_lsp(
 )
 {
     const float weight = 0.5f;
-    int i;
 
-    for (i = 0; i < LPC_ORD; i++)
+    for (int i = 0; i < LPC_ORD; i++)
         interp[i] = (1.0f - weight) * prev[i] + weight * next[i];
 }

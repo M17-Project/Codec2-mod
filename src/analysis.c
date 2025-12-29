@@ -46,7 +46,6 @@ static void hs_pitch_refinement(model_t *restrict model, const complex_t *restri
 	float Wo;  /* current "test" fundamental freq. */
 	float Wom; /* Wo that maximises E */
 	float Em;  /* mamimum energy */
-	float p;   /* current pitch */
 
 	/* Initialisation */
 	model->L = M_PI / model->Wo; /* use initial pitch est. for L */
@@ -54,7 +53,7 @@ static void hs_pitch_refinement(model_t *restrict model, const complex_t *restri
 	Em = 0.0;
 
 	/* Determine harmonic sum for a range of Wo values */
-	for (p = pmin; p <= pmax; p += pstep)
+	for (float p = pmin; p <= pmax; p += pstep)
 	{
 		E = 0.0;
 		Wo = TWO_PI / p;

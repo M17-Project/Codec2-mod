@@ -110,22 +110,21 @@ static int lpc_to_lsp(
 )
 {
     float psuml, psumr, psumm, xl, xr, xm;
-    int i, j, m;
     float *pt;     /* ptr used for cheb_poly_eval(), whether P' or Q' */
     int roots = 0; /* number of roots found */
     float Q[LPC_ORD + 1];
     float P[LPC_ORD + 1];
 
-    m = LPC_ORD / 2; /* order of P'(z) & Q'(z) polynimials 	*/
+    int m = LPC_ORD / 2; /* order of P'(z) & Q'(z) polynimials 	*/
 
     P[0] = Q[0] = 1.0f;
-    for (i = 1; i <= m; i++)
+    for (int i = 1; i <= m; i++)
     {
         P[i] = a[i] + a[LPC_ORD + 1 - i] - P[i - 1];
         Q[i] = a[i] - a[LPC_ORD + 1 - i] + Q[i - 1];
     }
 
-    for (i = 0; i < m; i++)
+    for (int i = 0; i < m; i++)
     {
         P[i] *= 2.0f;
         Q[i] *= 2.0f;
@@ -136,7 +135,7 @@ static int lpc_to_lsp(
     xl = 1.0; /* start at point xl = 1 		*/
     const float delta = LSP_DELTA1;
 
-    for (j = 0; j < LPC_ORD; j++)
+    for (int j = 0; j < LPC_ORD; j++)
     {
         pt = (j & 1) ? Q : P; /* determines whether P' or Q' is eval. */
 
@@ -199,7 +198,7 @@ static int lpc_to_lsp(
     }
 
     /* convert from x domain to radians */
-    for (i = 0; i < LPC_ORD; i++)
+    for (int i = 0; i < LPC_ORD; i++)
     {
         freq[i] = acosf(freq[i]);
     }

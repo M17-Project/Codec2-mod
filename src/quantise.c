@@ -155,7 +155,6 @@ float decode_energy(int index, int bits)
 
 void encode_lspds_scalar(uint16_t *indexes, float *lsp)
 {
-	int i;
 	float lsp_hz[LPC_ORD];
 	float lsp__hz[LPC_ORD];
 	float dlsp[LPC_ORD];
@@ -164,18 +163,18 @@ void encode_lspds_scalar(uint16_t *indexes, float *lsp)
 	const float *cb;
 	float se;
 
-	for (i = 0; i < LPC_ORD; i++)
+	for (int i = 0; i < LPC_ORD; i++)
 	{
 		wt[i] = 1.0;
 	}
 
 	/* convert from radians to Hz so we can use human readable
 	   frequencies */
-	for (i = 0; i < LPC_ORD; i++)
+	for (int i = 0; i < LPC_ORD; i++)
 		lsp_hz[i] = (4000.0 / M_PI) * lsp[i];
 
 	wt[0] = 1.0;
-	for (i = 0; i < LPC_ORD; i++)
+	for (int i = 0; i < LPC_ORD; i++)
 	{
 		/* find difference from previous quantised lsp */
 		if (i)
@@ -196,12 +195,11 @@ void encode_lspds_scalar(uint16_t *indexes, float *lsp)
 
 void decode_lspds_scalar(float *lsp_, const int *indexes)
 {
-	int i;
 	float lsp__hz[LPC_ORD];
 	float dlsp_[LPC_ORD];
 	const float *cb;
 
-	for (i = 0; i < LPC_ORD; i++)
+	for (int i = 0; i < LPC_ORD; i++)
 	{
 		cb = &delta_lsp_cb[i][0];
 		dlsp_[i] = cb[indexes[i]];

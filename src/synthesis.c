@@ -6,23 +6,22 @@
 
 static void make_synthesis_window(float *Pn)
 {
-	int i;
 	float win;
 
 	/* Generate Parzen window in time domain */
 	win = 0.0;
-	for (i = 0; i < N_SAMP / 2 - TW; i++)
+	for (int i = 0; i < N_SAMP / 2 - TW; i++)
 		Pn[i] = 0.0;
 	win = 0.0;
-	for (i = N_SAMP / 2 - TW; i < N_SAMP / 2 + TW; win += 1.0 / (2 * TW), i++)
+	for (int i = N_SAMP / 2 - TW; i < N_SAMP / 2 + TW; win += 1.0 / (2 * TW), i++)
 		Pn[i] = win;
-	for (i = N_SAMP / 2 + TW; i < 3 * N_SAMP / 2 - TW; i++)
+	for (int i = N_SAMP / 2 + TW; i < 3 * N_SAMP / 2 - TW; i++)
 		Pn[i] = 1.0;
 	win = 1.0;
-	for (i = 3 * N_SAMP / 2 - TW; i < 3 * N_SAMP / 2 + TW;
+	for (int i = 3 * N_SAMP / 2 - TW; i < 3 * N_SAMP / 2 + TW;
 		 win -= 1.0f / (2.0f * TW), i++)
 		Pn[i] = win;
-	for (i = 3.0f * N_SAMP / 2.0f + TW; i < 2 * N_SAMP; i++)
+	for (int i = 3.0f * N_SAMP / 2.0f + TW; i < 2 * N_SAMP; i++)
 		Pn[i] = 0.0;
 }
 
@@ -56,7 +55,6 @@ static void phase_synth_zero_order(
 
 )
 {
-	int m;
 	float new_phi;
 	complex_t Ex[MAX_AMP + 1]; /* excitation samples */
 	complex_t A_[MAX_AMP + 1]; /* synthesised harmonic samples */
@@ -72,7 +70,7 @@ static void phase_synth_zero_order(
 	ex_phase[0] += (model->Wo) * N_SAMP;
 	ex_phase[0] -= TWO_PI * floorf(ex_phase[0] / TWO_PI + 0.5);
 
-	for (m = 1; m <= model->L; m++)
+	for (int m = 1; m <= model->L; m++)
 	{
 		/* generate excitation */
 		if (model->voiced)

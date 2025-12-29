@@ -67,7 +67,6 @@ void codec2_encode(codec2_t *c2, uint8_t *bits, const int16_t *speech)
 	float e;
 	int Wo_index, e_index;
 	uint16_t lspd_indexes[LPC_ORD];
-	int i;
 	unsigned int nbit = 0;
 
 	memset(bits, 0, BYTES_PER_FRAME); // 64 bits
@@ -87,7 +86,7 @@ void codec2_encode(codec2_t *c2, uint8_t *bits, const int16_t *speech)
 	pack(bits, &nbit, e_index, E_BITS);
 
 	encode_lspds_scalar(lspd_indexes, lsps);
-	for (i = 0; i < LSPD_SCALAR_INDEXES; i++)
+	for (int i = 0; i < LSPD_SCALAR_INDEXES; i++)
 	{
 		pack(bits, &nbit, lspd_indexes[i], 5); // codebook indices are 5 bits
 	}
