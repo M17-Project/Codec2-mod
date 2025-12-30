@@ -200,7 +200,7 @@ static int lpc_to_lsp(
     /* convert from x domain to radians */
     for (int i = 0; i < LPC_ORD; i++)
     {
-        freq[i] = acosf(freq[i]);
+        freq[i] = fast_acosf(freq[i]);
     }
 
     return (roots);
@@ -218,7 +218,7 @@ void lsp_to_lpc(
 
     /* convert from radians to the x=cos(w) domain */
     for (int i = 0; i < LPC_ORD; i++)
-        freq[i] = cosf(lsp[i]);
+        freq[i] = fast_cosf(lsp[i]);
 
     /* initialise contents of array */
     memset(Wp, 0, sizeof(Wp));

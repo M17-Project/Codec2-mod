@@ -24,6 +24,42 @@ float fast_atan2f(float y, float x)
 	return (y < 0.0f) ? -angle : angle;
 }
 
+float fast_acosf(float x)
+{
+	/* Clamp to valid domain */
+	if (x < 0.0f)
+		x = 0.0f;
+	if (x > 1.0f)
+		x = 1.0f;
+
+	/* Horner evaluation of polynomial */
+	float p = ((-0.02018578706f * x + 0.07573937599f) * x - 0.21237006509f) * x + 1.57071004674f;
+
+	return sqrtf(1.0f - x) * p;
+}
+
+/* Note: the domain is restricted to [0, pi] */
+/* this is enough for LSP space and avoids all the cosf() overhead */
+float fast_cosf(float x)
+{
+	static const float PI_2 = M_PI / 2.0f;
+	float sign = 1.0f;
+
+	/* Fold to [0, pi/2] */
+	if (x > PI_2)
+	{				  /* pi/2 */
+		x = M_PI - x; /* pi - x */
+		sign = -1.0f;
+	}
+
+	/* Even polynomial Horner evaluation */
+	float x2 = x * x;
+
+	float p = ((-0.00127868965f * x2 + 0.04151167014f) * x2 - 0.49993087925f) * x2 + 0.99999528087f;
+
+	return sign * p;
+}
+
 int codec2_rand(unsigned long *prng_state)
 {
 	*prng_state = *prng_state * 1103515245 + 12345;
