@@ -1,5 +1,5 @@
-#ifndef QUANTISE_H
-#define QUANTISE_H
+#ifndef CODEC2_MOD_QUANTISE_H
+#define CODEC2_MOD_QUANTISE_H
 
 void pack(uint8_t *bitArray, unsigned int *bitIndex,
           unsigned int field, unsigned int fieldWidth);
@@ -14,4 +14,4 @@ float decode_energy(int index, int bits);
 void encode_lspds_scalar(uint16_t *indexes, float *lsp);
 void decode_lspds_scalar(float *lsp_, const int *indexes);
 
-#endif /* QUANTISE_H */
+#endif /* CODEC2_MOD_QUANTISE_H */

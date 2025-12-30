@@ -1,4 +1,5 @@
 #include "codec2_internal.h"
+#include "util.h"
 #include "lpc.h"
 
 /* ~15Hz bandwidth expansion */

@@ -1,5 +1,5 @@
-#ifndef LPC_H
-#define LPC_H
+#ifndef CODEC2_MOD_LPC_H
+#define CODEC2_MOD_LPC_H
 
 void aks_to_mag2(
     codec2_t *c2,
@@ -23,4 +23,4 @@ void lsp_to_lpc(
 
 void apply_lpc_correction(model_t *model);
 
-#endif /* LPC_H */
+#endif /* CODEC2_MOD_LPC_H */

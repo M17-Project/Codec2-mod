@@ -27,15 +27,23 @@ float fast_atan2f(float y, float x)
 float fast_acosf(float x)
 {
 	/* Clamp to valid domain */
-	if (x < 0.0f)
-		x = 0.0f;
+	if (x < -1.0f)
+		x = -1.0f;
 	if (x > 1.0f)
 		x = 1.0f;
 
-	/* Horner evaluation of polynomial */
-	float p = ((-0.02018578706f * x + 0.07573937599f) * x - 0.21237006509f) * x + 1.57071004674f;
+	int neg = 0;
+	if (x < 0.0f)
+	{
+		x = -x;
+		neg = 1;
+	}
 
-	return sqrtf(1.0f - x) * p;
+	/* Horner evaluation of polynomial */
+	float p = ((((-0.004731162409361028f * x + 0.02013917916990988f) * x -0.04547268716508862f) * x + 0.08798969877894365f) * x - 0.2145148619010314f) * x + 1.57079461300486f;
+	float y = sqrtf(1.0f - x) * p;
+
+	return neg ? (float)M_PI - y : y;
 }
 
 /* Note: the domain is restricted to [0, pi] */
@@ -54,8 +62,7 @@ float fast_cosf(float x)
 
 	/* Even polynomial Horner evaluation */
 	float x2 = x * x;
-
-	float p = ((-0.00127868965f * x2 + 0.04151167014f) * x2 - 0.49993087925f) * x2 + 0.99999528087f;
+	float p = (((2.323747198784698e-5f * x2 - 0.001385741491153336f) * x2 + 0.04166409053859771f) * x2 - 0.4999992686979083f) * x2 + 0.999999967262265f;
 
 	return sign * p;
 }

@@ -1,5 +1,5 @@
-#ifndef SYNTHESIS_H
-#define SYNTHESIS_H
+#ifndef CODEC2_MOD_SYNTHESIS_H
+#define CODEC2_MOD_SYNTHESIS_H
 
 void synthesise_one_frame(
     codec2_t *c2,
@@ -11,4 +11,4 @@ void synthesise_one_frame(
 
 void synthesis_init(codec2_t *c2);
 
-#endif /* SYNTHESIS_H */
+#endif /* CODEC2_MOD_SYNTHESIS_H */

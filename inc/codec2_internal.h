@@ -1,5 +1,5 @@
-#ifndef CODEC2_INTERNAL_H
-#define CODEC2_INTERNAL_H
+#ifndef CODEC2_MOD_INTERNAL_H
+#define CODEC2_MOD_INTERNAL_H
 
 /*
   This work uses code written by David Rowe VK5DGR et al.
@@ -163,4 +163,4 @@ typedef struct codec2_t
 
 _Static_assert(sizeof(((codec2_t *)0)->fft_buffer) >= FFT_ENC * sizeof(kiss_fft_cpx), "fft_buffer too small for FFT_ENC scratch");
 
-#endif /* CODEC2_INTERNAL_H */
+#endif /* CODEC2_MOD_INTERNAL_H */

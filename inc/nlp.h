@@ -1,5 +1,5 @@
-#ifndef NLP_H
-#define NLP_H
+#ifndef CODEC2_MOD_NLP_H
+#define CODEC2_MOD_NLP_H
 
 #include "codec2_internal.h"
 
@@ -13,4 +13,4 @@ float nlp(
 
 void nlp_init(nlp_t *nlp);
 
-#endif /* NLP_H */
+#endif /* CODEC2_MOD_NLP_H */
