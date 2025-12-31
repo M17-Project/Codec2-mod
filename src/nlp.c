@@ -2,19 +2,68 @@
 #include "nlp.h"
 #include <string.h>
 
-const float nlp_fir[NLP_NTAP] = {
-    -1.0818124e-03, -1.1008344e-03, -9.2768838e-04, -4.2289438e-04,
-    5.5034190e-04, 2.0029849e-03, 3.7058509e-03, 5.1449415e-03,
-    5.5924666e-03, 4.3036754e-03, 8.0284511e-04, -4.8204610e-03,
-    -1.1705810e-02, -1.8199275e-02, -2.2065282e-02, -2.0920610e-02,
-    -1.2808831e-02, 3.2204775e-03, 2.6683811e-02, 5.5520624e-02,
-    8.6305944e-02, 1.1480192e-01, 1.3674206e-01, 1.4867556e-01,
-    1.4867556e-01, 1.3674206e-01, 1.1480192e-01, 8.6305944e-02,
-    5.5520624e-02, 2.6683811e-02, 3.2204775e-03, -1.2808831e-02,
-    -2.0920610e-02, -2.2065282e-02, -1.8199275e-02, -1.1705810e-02,
-    -4.8204610e-03, 8.0284511e-04, 4.3036754e-03, 5.5924666e-03,
-    5.1449415e-03, 3.7058509e-03, 2.0029849e-03, 5.5034190e-04,
-    -4.2289438e-04, -9.2768838e-04, -1.1008344e-03, -1.0818124e-03};
+/* original taps, but re-ordered in a polyphase filter bank */
+const float nlp_fir_poly[NLP_NPHASE * NLP_TAPS_PP] = {
+    // phase 0
+    -0.00108181240f,
+    0.00200298490f,
+    0.00080284511f,
+    -0.02092061000f,
+    0.08630594400f,
+    0.13674206000f,
+    0.00322047750f,
+    -0.01170581000f,
+    0.00514494150f,
+    -0.00092768838f,
+
+    // phase 1
+    -0.00110083440f,
+    0.00370585090f,
+    -0.00482046100f,
+    -0.01280883100f,
+    0.11480192000f,
+    0.11480192000f,
+    -0.01280883100f,
+    -0.00482046100f,
+    0.00370585090f,
+    -0.00110083440f,
+
+    // phase 2
+    -0.00092768838f,
+    0.00514494150f,
+    -0.01170581000f,
+    0.00322047750f,
+    0.13674206000f,
+    0.08630594400f,
+    -0.02092061000f,
+    0.00080284511f,
+    0.00200298490f,
+    -0.00108181240f,
+
+    // phase 3
+    -0.00042289438f,
+    0.00559246660f,
+    -0.01819927500f,
+    0.02668381100f,
+    0.14867556000f,
+    0.05552062400f,
+    -0.02206528200f,
+    0.00430367540f,
+    0.00055034190f,
+    0.00000000000f,
+
+    // phase 4
+    0.00055034190f,
+    0.00430367540f,
+    -0.02206528200f,
+    0.05552062400f,
+    0.14867556000f,
+    0.02668381100f,
+    -0.01819927500f,
+    0.00559246660f,
+    -0.00042289438f,
+    0.00000000000f,
+};
 
 static float post_process_sub_multiples(complex_t *Fw, float gmax, int gmax_bin, float *prev_f0)
 {
@@ -77,7 +126,6 @@ static float post_process_sub_multiples(complex_t *Fw, float gmax, int gmax_bin,
 float nlp(
     nlp_t *restrict nlp,
     const float *restrict Sn, /* input speech vector */
-    int n,                    /* frames shift (no. new samples in Sn[])             */
     float *restrict pitch,    /* estimated pitch period in samples at current Fs    */
     float *restrict prev_f0   /* previous pitch f0 in Hz, memory for pitch tracking */
 )
@@ -87,16 +135,20 @@ float nlp(
     float gmax;
     int gmax_bin;
     float best_f0;
+
     const int m = M_PITCH;
+    const int n = N_SAMP;
+    static const int d = N_SAMP / DEC;
+    static const int START_POS = M_PITCH - N_SAMP;
 
     /* Square, notch filter at DC, and LP filter vector */
     /* Square latest input samples */
-    for (int i = m - n; i < m; i++)
+    for (int i = START_POS; i < m; i++)
     {
         nlp->sq[i] = Sn[i] * Sn[i];
     }
 
-    for (int i = m - n; i < m; i++)
+    for (int i = START_POS; i < m; i++)
     { /* notch filter at DC */
         notch = nlp->sq[i] - nlp->mem_x;
         notch += COEFF * nlp->mem_y;
@@ -112,46 +164,41 @@ float nlp(
                                      exactly sure why. */
     }
 
-    /* FIR filter vector */
-    float *restrict mem = nlp->mem_fir;
-    const float *restrict fir = nlp_fir;
-    int pos = nlp->mem_pos;
+    /* decimating polyphase FIR filter */
+    /* push left */
+    memmove(nlp->sq_fir, nlp->sq_fir + d, (NDEC - d) * sizeof(float));
 
-    for (int i = m - n; i < m; i++)
+    for (int i = 0; i < d; i++)
     {
-        /* write new sample twice */
-        mem[pos] = nlp->sq[i];
-        mem[pos + NLP_NTAP] = nlp->sq[i];
-
-        /* FIR dot product: identical order to original */
+        int idx = START_POS + NLP_NPHASE * i;
         float acc = 0.0f;
-        float *restrict x = &mem[pos + 1];
 
-        /* NLP_NTAP=48 taps, unrolled by 4 */
-        for (int j = 0; j < NLP_NTAP; j += 4)
+        for (int p = 0; p < NLP_NPHASE; p++)
         {
-            acc += x[j + 0] * fir[j + 0];
-            acc += x[j + 1] * fir[j + 1];
-            acc += x[j + 2] * fir[j + 2];
-            acc += x[j + 3] * fir[j + 3];
+            const float *restrict h = &nlp_fir_poly[p * NLP_TAPS_PP];
+            int base = idx - p;
+
+            acc += h[0] * nlp->sq[base - 0 * NLP_NPHASE];
+            acc += h[1] * nlp->sq[base - 1 * NLP_NPHASE];
+            acc += h[2] * nlp->sq[base - 2 * NLP_NPHASE];
+            acc += h[3] * nlp->sq[base - 3 * NLP_NPHASE];
+            acc += h[4] * nlp->sq[base - 4 * NLP_NPHASE];
+            acc += h[5] * nlp->sq[base - 5 * NLP_NPHASE];
+            acc += h[6] * nlp->sq[base - 6 * NLP_NPHASE];
+            acc += h[7] * nlp->sq[base - 7 * NLP_NPHASE];
+            acc += h[8] * nlp->sq[base - 8 * NLP_NPHASE];
+            acc += h[9] * nlp->sq[base - 9 * NLP_NPHASE];
         }
 
-        nlp->sq[i] = acc;
-
-        /* advance pointer, wrap manually */
-        pos++;
-        if (pos == NLP_NTAP)
-            pos = 0;
+        nlp->sq_fir[NDEC - d + i] = acc; /* overwrite with d=16 fresh samples */
     }
-
-    nlp->mem_pos = pos;
 
     /* Decimate and DFT */
     memset(nlp->fftr_buff, 0, sizeof(nlp->fftr_buff));
 
     for (int i = 0; i < NDEC; i++)
     {
-        nlp->fftr_buff[i] = nlp->sq[i * DEC] * nlp->w[i];
+        nlp->fftr_buff[i] = nlp->sq_fir[i] * nlp->w[i];
     }
 
     kiss_fftr(nlp->fftr_cfg, nlp->fftr_buff, Fw);
@@ -185,7 +232,7 @@ float nlp(
     best_f0 = post_process_sub_multiples(Fw, gmax, gmax_bin, prev_f0);
 
     /* Shift samples in buffer to make room for new samples */
-    for (int i = 0; i < m - n; i++)
+    for (int i = 0; i < START_POS; i++)
         nlp->sq[i] = nlp->sq[i + n];
 
     /* return pitch period in samples and F0 estimate */
@@ -198,17 +245,15 @@ float nlp(
 
 void nlp_init(nlp_t *nlp)
 {
-	/* mem_fir must be cleared whenever mem_pos is reset */
-	nlp->mem_pos = 0;
-	memset(nlp->mem_fir, 0, sizeof(nlp->mem_fir));
+    memset(nlp->sq_fir, 0, sizeof(nlp->sq_fir));
 
-	for (int i = 0; i < NDEC; i++)
-	{
-		nlp->w[i] = 0.5 - 0.5 * cosf(TWO_PI * i / (NDEC - 1));
-	}
+    for (int i = 0; i < NDEC; i++)
+    {
+        nlp->w[i] = 0.5 - 0.5 * cosf(TWO_PI * i / (NDEC - 1));
+    }
 
-	memset(nlp->sq, 0, sizeof(nlp->sq));
+    memset(nlp->sq, 0, sizeof(nlp->sq));
 
-	nlp->mem_x = 0.0;
-	nlp->mem_y = 0.0;
+    nlp->mem_x = 0.0;
+    nlp->mem_y = 0.0;
 }

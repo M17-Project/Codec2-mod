@@ -298,7 +298,7 @@ void analyse_one_frame(
 	dft_speech(c2->fft_fwd_cfg, Sw, c2->Sn, c2->w);
 
 	/* Estimate pitch */
-	nlp(&c2->nlp, c2->Sn, N_SAMP, &pitch, &c2->prev_f0_enc);
+	nlp(&c2->nlp, c2->Sn, &pitch, &c2->prev_f0_enc);
 	model->Wo = TWO_PI / pitch;
 	model->L = M_PI / model->Wo;
 

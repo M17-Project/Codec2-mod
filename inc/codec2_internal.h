@@ -53,6 +53,8 @@
 #define T 0.1
 #define CNLP 0.3
 #define NLP_NTAP 48
+#define NLP_NPHASE DEC
+#define NLP_TAPS_PP ((NLP_NTAP + DEC - 1) / DEC)
 
 #define WO_BITS 7
 #define WO_LEVELS (1 << WO_BITS)
@@ -114,9 +116,8 @@ typedef struct nlp_t
 {
     float w[PMAX_M / DEC];
     float sq[PMAX_M];
+    float sq_fir[NDEC];
     float mem_x, mem_y;
-    float mem_fir[NLP_NTAP * 2];
-    int mem_pos;
     kiss_fftr_cfg fftr_cfg;
     float fftr_buff[PE_FFT_SIZE];
     complex_t Fw[PE_FFT_SIZE / 2 + 1];
