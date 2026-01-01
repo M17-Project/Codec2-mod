@@ -344,7 +344,7 @@ void aks_to_mag2(codec2_t *c2,
             /* boost low frequencies a bit */
             float freq = i * (SAMP_RATE * 0.5f / (FFT_ENC / 2));
             if (freq < 1000.0f)
-                Pw_i *= 1.9327954f; // this value seems to maximize ViSQOL
+                Pw_i *= 1.96f;
 
             Em += Pw_i;
         }
@@ -357,13 +357,12 @@ void aks_to_mag2(codec2_t *c2,
 }
 
 /* Apply first harmonic LPC correction at decoder.
-   This helps improve low pitch males after LPC modelling.
-   Original value used by David Rowe: 0.032 */
+   This helps improve low pitch males after LPC modelling. */
 void apply_lpc_correction(model_t *model)
 {
     if (model->Wo < (M_PI * 150.0f / 4000.0f))
     {
-        model->A[1] *= 0.0338f; // found experimentally for best ViSQOL
+        model->A[1] *= 0.032f;
     }
 }
 
