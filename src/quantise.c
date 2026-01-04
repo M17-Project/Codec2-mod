@@ -1,6 +1,21 @@
 #include "codec2_internal.h"
 #include "quantise.h"
 
+static inline unsigned int binary_to_gray(unsigned int x)
+{
+	return x ^ (x >> 1);
+}
+
+static inline unsigned int gray_to_binary(unsigned int g)
+{
+	g ^= g >> 16;
+	g ^= g >> 8;
+	g ^= g >> 4;
+	g ^= g >> 2;
+	g ^= g >> 1;
+	return g;
+}
+
 void pack(
 	uint8_t *bitArray,		/* The output bit array. */
 	unsigned int *bitIndex, /* Index into the string in BITS, not bytes. */
@@ -8,9 +23,9 @@ void pack(
 	unsigned int fieldWidth /* Width of the field in BITS, not bytes. */
 )
 {
-	/* Convert the field to Gray code, but only if the field is more than 1 bit */
+	/* Convert to Gray code if multi-bit */
 	if (fieldWidth > 1)
-		field = (field >> 1) ^ field;
+		field = binary_to_gray(field);
 
 	do
 	{
@@ -19,10 +34,12 @@ void pack(
 		unsigned int sliceWidth = bitsLeft < fieldWidth ? bitsLeft : fieldWidth;
 		unsigned int wordIndex = bI >> 3;
 
-		bitArray[wordIndex] |= ((uint8_t)((field >> (fieldWidth - sliceWidth)) << (bitsLeft - sliceWidth)));
+		bitArray[wordIndex] |=
+			(uint8_t)((field >> (fieldWidth - sliceWidth)) << (bitsLeft - sliceWidth));
 
 		*bitIndex = bI + sliceWidth;
 		fieldWidth -= sliceWidth;
+
 	} while (fieldWidth != 0);
 }
 
@@ -32,9 +49,12 @@ int unpack(
 	unsigned int fieldWidth	 /* Width of the field in BITS, not bytes. */
 )
 {
+	static const uint8_t mask8[9] = {
+		0x00, 0x01, 0x03, 0x07, 0x0F,
+		0x1F, 0x3F, 0x7F, 0xFF};
+
 	unsigned int field = 0;
 	unsigned int origWidth = fieldWidth;
-	unsigned int t;
 
 	do
 	{
@@ -43,39 +63,26 @@ int unpack(
 		unsigned int sliceWidth = bitsLeft < fieldWidth ? bitsLeft : fieldWidth;
 
 		field |= (((bitArray[bI >> 3] >> (bitsLeft - sliceWidth)) &
-				   ((1 << sliceWidth) - 1))
+				   mask8[sliceWidth])
 				  << (fieldWidth - sliceWidth));
 
 		*bitIndex = bI + sliceWidth;
 		fieldWidth -= sliceWidth;
 	} while (fieldWidth != 0);
 
-	if (origWidth > 1)
-	{
-		/* Convert from Gray code to binary. Works for maximum 8-bit fields. */
-		t = field ^ (field >> 8);
-		t ^= (t >> 4);
-		t ^= (t >> 2);
-		t ^= (t >> 1);
-	}
-	else
-	{
-		t = field;
-	}
-
-	return t;
+	return (origWidth > 1) ? gray_to_binary(field) : field;
 }
 
 int encode_Wo(float Wo, uint8_t bits)
 {
-	int index, Wo_levels = 1 << bits;
-	float norm;
+	int Wo_levels = 1 << bits;
 
-	norm = (Wo - W0_MIN) / (W0_MAX - W0_MIN);
-	index = floorf(Wo_levels * norm + 0.5);
+	float norm = (Wo - W0_MIN) / (W0_MAX - W0_MIN);
+	int index = (int)(Wo_levels * norm + 0.5f);
+
 	if (index < 0)
 		index = 0;
-	if (index > (Wo_levels - 1))
+	else if (index > Wo_levels - 1)
 		index = Wo_levels - 1;
 
 	return index;
@@ -83,29 +90,30 @@ int encode_Wo(float Wo, uint8_t bits)
 
 float decode_Wo(int index, int bits)
 {
-	float step;
-	float Wo;
 	int Wo_levels = 1 << bits;
+	float step = (W0_MAX - W0_MIN) / Wo_levels;
 
-	step = (W0_MAX - W0_MIN) / Wo_levels;
-	Wo = W0_MIN + step * (index);
-
-	return Wo;
+	// note: the return value should be
+	// `W0_MIN + step * (index + 0.5f)`
+	// to achieve symmetry with the encoder,
+	// but for some reason, it lowers ViSQOL MOS slightly
+	return W0_MIN + step * index;
 }
 
 int encode_energy(float e, int bits)
 {
-	int index, e_levels = 1 << bits;
-	float e_min = E_MIN_DB;
-	float e_max = E_MAX_DB;
-	float norm;
+	const int e_levels = 1 << bits;
+	const float e_min = E_MIN_DB;
+	const float e_max = E_MAX_DB;
 
-	e = 10.0 * log10f(e);
-	norm = (e - e_min) / (e_max - e_min);
-	index = floorf(e_levels * norm + 0.5);
+	float e_db = 10.0f * log10f(fmaxf(e, 1e-12f)); // avoid log(0)
+	float norm = (e_db - e_min) / (e_max - e_min);
+
+	int index = (int)(e_levels * norm + 0.5f);
+
 	if (index < 0)
 		index = 0;
-	if (index > (e_levels - 1))
+	else if (index > e_levels - 1)
 		index = e_levels - 1;
 
 	return index;
@@ -113,15 +121,14 @@ int encode_energy(float e, int bits)
 
 float decode_energy(int index, int bits)
 {
-	float step;
-	float e;
-	int e_levels = 1 << bits;
+	const int e_levels = 1 << bits;
+	const float step = (E_MAX_DB - E_MIN_DB) / e_levels;
 
-	step = (E_MAX_DB - E_MIN_DB) / e_levels;
-	e = E_MIN_DB + step * (index);
-	e = POW10F(e / 10.0f);
-
-	return e;
+	// note: just like decode_Wo() above
+	// (index + 0.5f) would assure symmetry with the encoder
+	// but for some reason it breaks MOS
+	float e_db = E_MIN_DB + step * index;
+	return POW10F(e_db / 10.0f);
 }
 
 void encode_lspds_scalar(int *indexes, const float *lsp)
@@ -163,20 +170,11 @@ void encode_lspds_scalar(int *indexes, const float *lsp)
 
 void decode_lspds_scalar(float *lsp_, const int *indexes)
 {
-	float lsp__hz[LPC_ORD];
-	float dlsp_[LPC_ORD];
-	const float *cb;
+	float lsp_hz = 0.0f;
 
 	for (int i = 0; i < LPC_ORD; i++)
 	{
-		cb = delta_lsp_cb[i];
-		dlsp_[i] = cb[indexes[i]];
-
-		if (i)
-			lsp__hz[i] = lsp__hz[i - 1] + dlsp_[i];
-		else
-			lsp__hz[0] = dlsp_[0];
-
-		lsp_[i] = (M_PI / 4000.0f) * lsp__hz[i];
+		lsp_hz += delta_lsp_cb[i][indexes[i]];
+		lsp_[i] = (M_PI / 4000.0f) * lsp_hz;
 	}
 }
