@@ -11,7 +11,7 @@ int encode_Wo(float Wo, uint8_t bits);
 float decode_Wo(int index, int bits);
 int encode_energy(float e, int bits);
 float decode_energy(int index, int bits);
-void encode_lspds_scalar(uint16_t *indexes, float *lsp);
+void encode_lspds_scalar(int *indexes, const float *lsp);
 void decode_lspds_scalar(float *lsp_, const int *indexes);
 
 #endif /* CODEC2_MOD_QUANTISE_H */

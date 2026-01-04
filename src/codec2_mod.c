@@ -66,7 +66,7 @@ void codec2_encode(codec2_t *c2, uint8_t *bits, const int16_t *speech)
 	float lsps[LPC_ORD];
 	float e;
 	int Wo_index, e_index;
-	uint16_t lspd_indexes[LPC_ORD];
+	int lspd_indexes[LPC_ORD];
 	unsigned int nbit = 0;
 
 	memset(bits, 0, BYTES_PER_FRAME); // 64 bits

@@ -66,35 +66,6 @@ int unpack(
 	return t;
 }
 
-static uint8_t quantise(
-	const float *cb, /* current VQ codebook */
-	float *vec,		 /* vector to quantise */
-	float *w,		 /* weighting vector */
-	float *se		 /* accumulated squared error */
-)
-{
-	float e; /* current error */
-	float diff;
-
-	float besti = 0;	/* best index so far */
-	float beste = 1E32; /* best error so far */
-	for (int j = 0; j < 32; j++)
-	{
-		e = 0.0;
-		diff = cb[j] - vec[0];
-		e = diff * w[0] * diff * w[0];
-		if (e < beste)
-		{
-			beste = e;
-			besti = j;
-		}
-	}
-
-	*se += beste;
-
-	return (besti);
-}
-
 int encode_Wo(float Wo, uint8_t bits)
 {
 	int index, Wo_levels = 1 << bits;
@@ -153,43 +124,40 @@ float decode_energy(int index, int bits)
 	return e;
 }
 
-void encode_lspds_scalar(uint16_t *indexes, float *lsp)
+void encode_lspds_scalar(int *indexes, const float *lsp)
 {
-	float lsp_hz[LPC_ORD];
-	float lsp__hz[LPC_ORD];
-	float dlsp[LPC_ORD];
-	float dlsp_[LPC_ORD];
-	float wt[LPC_ORD];
-	const float *cb;
-	float se;
+	float last_q_hz = 0.0f;
 
 	for (int i = 0; i < LPC_ORD; i++)
 	{
-		wt[i] = 1.0;
-	}
+		const float *cb = delta_lsp_cb[i];
+		float lsp_hz = (4000.0f / M_PI) * lsp[i];
+		float target = (i == 0) ? lsp_hz : (lsp_hz - last_q_hz);
 
-	/* convert from radians to Hz so we can use human readable
-	   frequencies */
-	for (int i = 0; i < LPC_ORD; i++)
-		lsp_hz[i] = (4000.0 / M_PI) * lsp[i];
+		float best_e = 4000.0f; // the value can't be more than Nyquist
+		int best_j = 0;
 
-	wt[0] = 1.0;
-	for (int i = 0; i < LPC_ORD; i++)
-	{
-		/* find difference from previous quantised lsp */
-		if (i)
-			dlsp[i] = lsp_hz[i] - lsp__hz[i - 1];
+		for (int j = 0; j < 32; j++)
+		{
+			float diff = fabsf(cb[j] - target);
+
+			if (diff < best_e)
+			{
+				best_e = diff;
+				best_j = j;
+			}
+			else if (cb[j] > target)
+			{
+				break;
+			}
+		}
+
+		indexes[i] = best_j;
+
+		if (i == 0)
+			last_q_hz = cb[best_j];
 		else
-			dlsp[0] = lsp_hz[0];
-
-		cb = &delta_lsp_cb[i][0];
-		indexes[i] = quantise(cb, &dlsp[i], wt, &se);
-		dlsp_[i] = cb[indexes[i]];
-
-		if (i)
-			lsp__hz[i] = lsp__hz[i - 1] + dlsp_[i];
-		else
-			lsp__hz[0] = dlsp_[0];
+			last_q_hz += cb[best_j];
 	}
 }
 
@@ -201,7 +169,7 @@ void decode_lspds_scalar(float *lsp_, const int *indexes)
 
 	for (int i = 0; i < LPC_ORD; i++)
 	{
-		cb = &delta_lsp_cb[i][0];
+		cb = delta_lsp_cb[i];
 		dlsp_[i] = cb[indexes[i]];
 
 		if (i)
