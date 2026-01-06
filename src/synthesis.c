@@ -57,9 +57,8 @@ static void sample_phase(
 static void phase_synth_zero_order(
 	codec2_t *c2,
 	model_t *model,
-	float *ex_phase, /* excitation phase of fundamental        */
-	complex_t *H	 /* L synthesis filter freq domain samples */
-
+	float *ex_phase,   /* excitation phase of fundamental        */
+	const complex_t *H /* L synthesis filter freq domain samples */
 )
 {
 	float new_phi;
@@ -76,14 +75,19 @@ static void phase_synth_zero_order(
 	*/
 	ex_phase[0] += (model->Wo) * N_SAMP;
 	ex_phase[0] -= TWO_PI * floorf(ex_phase[0] / TWO_PI + 0.5);
+	float phi0 = ex_phase[0];
+
+	static const float k = TWO_PI / CODEC2_RAND_MAX;
 
 	for (int m = 1; m <= model->L; m++)
 	{
 		/* generate excitation */
 		if (model->voiced)
 		{
-			Ex[m].r = cosf(ex_phase[0] * m);
-			Ex[m].i = sinf(ex_phase[0] * m);
+			float s, c;
+			codec2_sincosf(phi0 * m, &s, &c);
+			Ex[m].r = c;
+			Ex[m].i = s;
 		}
 		else
 		{
@@ -91,9 +95,11 @@ static void phase_synth_zero_order(
 			   phase is not needed in the unvoiced case, but no harm in
 			   keeping it.
 			*/
-			float phi = TWO_PI * (float)codec2_rand(&c2->next_rn) / CODEC2_RAND_MAX;
-			Ex[m].r = cosf(phi);
-			Ex[m].i = sinf(phi);
+			float phi = k * (float)codec2_rand(&c2->next_rn);
+			float s, c;
+			codec2_sincosf(phi, &s, &c);
+			Ex[m].r = c;
+			Ex[m].i = s;
 		}
 
 		/* filter using LPC filter */
@@ -108,6 +114,8 @@ static void phase_synth_zero_order(
 
 static void postfilter(codec2_t *restrict c2, model_t *restrict model, float *restrict bg_est)
 {
+	static const float k = TWO_PI / CODEC2_RAND_MAX;
+
 	/* determine average energy across spectrum */
 	float e = 1e-12;
 	for (int m = 1; m <= model->L; m++)
@@ -118,21 +126,23 @@ static void postfilter(codec2_t *restrict c2, model_t *restrict model, float *re
 	/* If beneath threshold, update bg estimate.  The idea
 	   of the threshold is to prevent updating during high level
 	   speech. */
-	if ((e < BG_THRESH) && !model->voiced)
-		*bg_est = *bg_est * (1.0 - BG_BETA) + e * BG_BETA;
-
-	/* now mess with phases during voiced frames to make any harmonics
-	   less then our background estimate unvoiced.
-	*/
-	float thresh = POW10F((*bg_est + BG_MARGIN) / 20.0f);
-
-	if (model->voiced)
+	if (!model->voiced)
 	{
+		if (e < BG_THRESH)
+			*bg_est = *bg_est * (1.0 - BG_BETA) + e * BG_BETA;
+	}
+	else
+	{
+		/* now mess with phases during voiced frames to make any harmonics
+		   less then our background estimate unvoiced. */
+
+		float thresh = POW10F((*bg_est + BG_MARGIN) / 20.0f);
+
 		for (int m = 1; m <= model->L; m++)
 		{
 			if (model->A[m] < thresh)
 			{
-				model->phi[m] = (TWO_PI / CODEC2_RAND_MAX) * (float)codec2_rand(&c2->next_rn);
+				model->phi[m] = k * (float)codec2_rand(&c2->next_rn);
 			}
 		}
 	}
@@ -154,7 +164,7 @@ static void ear_protection(float *in_out, int n)
 		return; // nothing to do here
 
 	/* determine how far above set point */
-	float over = max_abs / 30000.0;
+	float over = max_abs / 30000.0f;
 
 	/* If we are x dB over set point we reduce level by 2x dB, this
 	   attenuates major excursions in amplitude (likely to be caused
@@ -183,25 +193,26 @@ static void synthesise(
 	if (shift)
 	{
 		/* Update memories */
-		for (int i = 0; i < N_SAMP - 1; i++)
-		{
-			Sn_[i] = Sn_[i + N_SAMP];
-		}
+		memmove(Sn_, &Sn_[N_SAMP], (N_SAMP - 1) * sizeof(float));
 		Sn_[N_SAMP - 1] = 0.0;
 	}
 
 	memset(Sw_, 0, (FFT_DEC / 2 + 1) * sizeof(complex_t)); // original Sw_ size was this
 
 	/* Now set up frequency domain synthesised speech */
+	const float Wo_bin = model->Wo * FFT_1_R;
+
 	for (int l = 1; l <= model->L; l++)
 	{
-		int b = (int)(l * model->Wo * FFT_1_R + 0.5); // FFT_DEC == FFT_ENC
+		int b = (int)(l * Wo_bin + 0.5); // FFT_DEC == FFT_ENC
 		if (b > ((FFT_DEC / 2) - 1))
 		{
 			b = (FFT_DEC / 2) - 1;
 		}
-		Sw_[b].r = model->A[l] * cosf(model->phi[l]);
-		Sw_[b].i = model->A[l] * sinf(model->phi[l]);
+		float s, c;
+		codec2_sincosf(model->phi[l], &s, &c);
+		Sw_[b].r = model->A[l] * c;
+		Sw_[b].i = model->A[l] * s;
 	}
 
 	/* Perform inverse DFT */
@@ -213,12 +224,20 @@ static void synthesise(
 		Sn_[i] += sw_[FFT_DEC - N_SAMP + 1 + i] * Pn[i];
 	}
 
+	float *restrict dst = &Sn_[N_SAMP - 1];
+	const float *restrict src = sw_;
+	const float *restrict win = &Pn[N_SAMP - 1];
+
 	if (shift)
-		for (int i = N_SAMP - 1, j = 0; i < 2 * N_SAMP; i++, j++)
-			Sn_[i] = sw_[j] * Pn[i];
+	{
+		for (int j = 0; j < N_SAMP + 1; j++)
+			dst[j] = src[j] * win[j];
+	}
 	else
-		for (int i = N_SAMP - 1, j = 0; i < 2 * N_SAMP; i++, j++)
-			Sn_[i] += sw_[j] * Pn[i];
+	{
+		for (int j = 0; j < N_SAMP + 1; j++)
+			dst[j] += src[j] * win[j];
+	}
 }
 
 void synthesise_one_frame(

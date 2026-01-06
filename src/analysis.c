@@ -3,39 +3,56 @@
 #include "nlp.h"
 #include "util.h"
 
-static void make_analysis_window(kiss_fft_cfg fft_fwd_cfg, float *w, float *W)
+static void make_analysis_window(
+	codec2_t *c2,
+	kiss_fft_cfg fft_fwd_cfg,
+	float *restrict w,
+	float *restrict W)
 {
-	complex_t wshift[FFT_ENC] = {0};
+	static const int mp2 = M_PITCH / 2;
+	static const int nw2 = NW / 2;
+	static const int fe2 = FFT_ENC / 2;
 
-	float m = 0.0;
-	for (int i = 0; i < M_PITCH / 2 - NW / 2; i++)
-		w[i] = 0.0f;
-	for (int i = M_PITCH / 2 - NW / 2, j = 0; i < M_PITCH / 2 + NW / 2; i++, j++)
+	complex_t *restrict wshift = c2->fft_buffer;
+
+	/* zero time-domain window */
+	memset(w, 0, M_PITCH * sizeof(float));
+
+	/* build Hann window */
+	float m = 0.0f;
+
+	for (int j = 0; j < NW; j++)
 	{
-		w[i] = 0.5f - 0.5f * cosf(TWO_PI * j / (NW - 1));
-		m += w[i] * w[i];
+		float phase = TWO_PI * j / (NW - 1);
+		float val = 0.5f - 0.5f * cosf(phase);
+		int i = mp2 - nw2 + j;
+		w[i] = val;
+		m += val * val;
 	}
-	for (int i = M_PITCH / 2 + NW / 2; i < M_PITCH; i++)
-		w[i] = 0.0f;
 
-	m = 1.0f / sqrtf(m * FFT_ENC);
+	/* normalize (bit-exact with original) */
+	const float scale = 1.0f / sqrtf(m * FFT_ENC);
 	for (int i = 0; i < M_PITCH; i++)
-	{
-		w[i] *= m;
-	}
+		w[i] *= scale;
 
-	for (int i = 0; i < NW / 2; i++)
-		wshift[i].r = w[i + M_PITCH / 2];
+	/* zero FFT buffer */
+	memset(wshift, 0, FFT_ENC * sizeof(*wshift));
 
-	for (int i = FFT_ENC - NW / 2, j = M_PITCH / 2 - NW / 2; i < FFT_ENC; i++, j++)
+	/* circular shift */
+	for (int i = 0; i < nw2; i++)
+		wshift[i].r = w[i + mp2];
+
+	for (int i = FFT_ENC - nw2, j = mp2 - nw2; i < FFT_ENC; i++, j++)
 		wshift[i].r = w[j];
 
+	/* FFT */
 	kiss_fft(fft_fwd_cfg, wshift, wshift);
 
-	for (int i = 0; i < FFT_ENC / 2; i++)
+	/* rearrange frequency response */
+	for (int i = 0; i < fe2; i++)
 	{
-		W[i] = wshift[i + FFT_ENC / 2].r;
-		W[i + FFT_ENC / 2] = wshift[i].r;
+		W[i] = wshift[i + fe2].r;
+		W[i + fe2] = wshift[i].r;
 	}
 }
 
@@ -318,5 +335,5 @@ void analyse_one_frame(
 
 void analysis_init(codec2_t *c2)
 {
-	make_analysis_window(c2->fft_fwd_cfg, c2->w, c2->W);
+	make_analysis_window(c2, c2->fft_fwd_cfg, c2->w, c2->W);
 }

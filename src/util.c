@@ -66,15 +66,3 @@ float fast_cosf(float x)
 
 	return sign * p;
 }
-
-int ceilf_fast(float x)
-{
-	int i = (int)x;
-	return i + (i < x);
-}
-
-int codec2_rand(unsigned long *prng_state)
-{
-	*prng_state = *prng_state * 1103515245 + 12345;
-	return ((unsigned)(*prng_state / 65536) % 32768);
-}

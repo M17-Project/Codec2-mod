@@ -127,7 +127,7 @@ typedef struct nlp_t
 
 typedef struct codec2_t
 {
-    unsigned long next_rn;
+    uint32_t next_rn;
 
     float w[M_PITCH];
     float W[FFT_ENC];
