@@ -41,7 +41,6 @@ static void make_analysis_window(kiss_fft_cfg fft_fwd_cfg, float *w, float *W)
 
 static void hs_pitch_refinement(model_t *restrict model, const complex_t *restrict Sw, float pmin, float pmax, float pstep)
 {
-	int b;	   /* bin for current harmonic centre */
 	float E;   /* energy for current pitch*/
 	float Wo;  /* current "test" fundamental freq. */
 	float Wom; /* Wo that maximises E */
@@ -50,23 +49,30 @@ static void hs_pitch_refinement(model_t *restrict model, const complex_t *restri
 	/* Initialisation */
 	model->L = M_PI / model->Wo; /* use initial pitch est. for L */
 	Wom = model->Wo;
-	Em = 0.0;
+	Em = 0.0f;
 
 	/* Determine harmonic sum for a range of Wo values */
 	for (float p = pmin; p <= pmax; p += pstep)
 	{
-		E = 0.0;
+		E = 0.0f;
 		Wo = TWO_PI / p;
 
 		float bFloat = Wo * FFT_1_R;
-		float currentBFloat = bFloat;
+		float currentB = bFloat; // bin for current harmonic centre
 
-		/* Sum harmonic magnitudes */
+		// limiting m to L=M_PI/Wo causes problems
+		// we test the same number of harmonics per candidate
 		for (int m = 1; m <= model->L; m++)
 		{
-			b = (int)(currentBFloat + 0.5);
+			int b = (int)(currentB + 0.5f);
+
+			// early breaking causes problems
+			// reading past Nyquist adds some noise that helps
+			// if (b >= FFT_DEC / 2)
+			//	break;
+
 			E += Sw[b].r * Sw[b].r + Sw[b].i * Sw[b].i;
-			currentBFloat += bFloat;
+			currentB += bFloat;
 		}
 
 		/* Compare to see if this is a maximum */
