@@ -133,30 +133,51 @@ float decode_energy(int index, int bits)
 
 void encode_lspds_scalar(int *indexes, const float *lsp)
 {
-	float last_q_hz = 0.0f;
+	static const float k = 4000.0f / M_PI;
+	int last_q_hz = 0;
 
 	for (int i = 0; i < LPC_ORD; i++)
 	{
-		const float *cb = delta_lsp_cb[i];
-		float lsp_hz = (4000.0f / M_PI) * lsp[i];
-		float target = (i == 0) ? lsp_hz : (lsp_hz - last_q_hz);
+		const uint16_t *cb = delta_lsp_cb[i];
+		float lsp_hz = k * lsp[i];
+		float target = (i == 0) ? lsp_hz : (lsp_hz - (float)last_q_hz);
 
-		float best_e = 4000.0f; // the value can't be more than Nyquist
-		int best_j = 0;
+		// given the Poisson-like probability density function of the LSF indices
+		// and strictly monotonic codebooks,
+		// it seems reasonable to use binary search
+		// indices for LSF 7, 8, and 9 (counting from 1)
+		// have high peaks at cb[31], so we can detect that early
+		// modes for LSF indices: {8, 4, 6, 11, 10, 8, 15, 13, 14, 11}
+		// (measured using 500 random files from LibriSpeech)
+		int best_j;
 
-		for (int j = 0; j < 32; j++)
+		/* early saturation detection */
+		if (target <= (float)cb[0])
 		{
-			float diff = fabsf(cb[j] - target);
+			best_j = 0;
+		}
+		else if (target >= (float)cb[31])
+		{
+			best_j = 31;
+		}
+		else
+		{
+			/* find first j such that cb[j] > target */
+			int lo = 0, hi = 31;
+			while (lo + 1 < hi)
+			{
+				int mid = (lo + hi) >> 1;
+				if ((float)cb[mid] <= target)
+					lo = mid;
+				else
+					hi = mid;
+			}
 
-			if (diff < best_e)
-			{
-				best_e = diff;
-				best_j = j;
-			}
-			else if (cb[j] > target)
-			{
-				break;
-			}
+			float e_lo = fabsf((float)cb[lo] - target);
+			float e_hi = fabsf((float)cb[hi] - target);
+
+			/* lower index wins ties */
+			best_j = (e_lo <= e_hi) ? lo : hi;
 		}
 
 		indexes[i] = best_j;
@@ -170,11 +191,12 @@ void encode_lspds_scalar(int *indexes, const float *lsp)
 
 void decode_lspds_scalar(float *lsp_, const int *indexes)
 {
-	float lsp_hz = 0.0f;
+	int lsp_hz = 0;
+	static const float k = M_PI / 4000.0f;
 
 	for (int i = 0; i < LPC_ORD; i++)
 	{
 		lsp_hz += delta_lsp_cb[i][indexes[i]];
-		lsp_[i] = (M_PI / 4000.0f) * lsp_hz;
+		lsp_[i] = k * (float)lsp_hz;
 	}
 }

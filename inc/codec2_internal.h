@@ -99,7 +99,7 @@ _Static_assert(E_BITS <= 8, "encode_energy() assumes <= 8-bit fields");
 /* consts */
 extern const float nlp_fir[NLP_NTAP];
 extern const float bw_gamma[LPC_ORD + 1];
-extern const float delta_lsp_cb[LPC_ORD][32];
+extern const uint16_t delta_lsp_cb[LPC_ORD][32];
 
 typedef kiss_fft_cpx complex_t;
 

@@ -1,4 +1,6 @@
-const float delta_lsp_cb[10][32] =
+#include <stdint.h>
+
+const uint16_t delta_lsp_cb[10][32] =
 {
 	{
 		25,
