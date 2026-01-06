@@ -31,6 +31,7 @@
 #define FFT_ENC 512
 #define FFT_DEC 512
 #define V_THRESH 6.0
+#define V_THRESH_LIN (powf(10.0f, V_THRESH * 0.1f))
 #define LPC_ORD 10
 
 #define P_MAX_S 0.0200f

@@ -155,54 +155,77 @@ static void estimate_amplitudes(model_t *model, const complex_t *Sw, int est_pha
 	}
 }
 
-static float est_voicing_mbe(model_t *restrict model, const complex_t *restrict Sw, const float *restrict W)
+static void est_voicing_mbe(model_t *restrict model, const complex_t *restrict Sw, const float *restrict W)
 {
-	complex_t Am; /* amplitude sample for this band */
-	int offset;	  /* centers Hw[] about current harmonic */
-	float den;	  /* denominator of Am expression */
-	float error;  /* accumulated error between original and synthesised */
-	float Wo;
-	float sig, snr;
-	float elow, ehigh, eratio;
-	float sixty;
-	complex_t Ew;
+	const float Wo = model->Wo;
+	const float Wo_bin = Wo * FFT_ENC / TWO_PI;
 
-	Ew.r = 0;
-	Ew.i = 0;
+	/*
+	   Determine the ratio of low frequency to high frequency energy,
+	   voiced speech tends to be dominated by low frequency energy,
+	   unvoiced by high frequency. This measure can be used to
+	   determine if we have made any gross errors.
+	*/
+	const int l_1000hz = model->L * 1000.0f / (SAMP_RATE / 2);
+	const int l_2000hz = model->L * 2000.0f / (SAMP_RATE / 2);
+	const int l_4000hz = model->L * 4000.0f / (SAMP_RATE / 2);
 
-	int l_1000hz = model->L * 1000.0 / (SAMP_RATE / 2);
-	sig = 1E-4;
-	for (int l = 1; l <= l_1000hz; l++)
+	float sig = 1e-4, elow = 1e-4, ehigh = 1e-4;
+	for (int l = 1; l <= l_4000hz; l++)
 	{
-		sig += model->A[l] * model->A[l];
+		float t = model->A[l] * model->A[l];
+
+		if (l <= l_2000hz)
+		{
+			elow += t;
+			if (l <= l_1000hz)
+				sig += t;
+		}
+		if (l >= l_2000hz)
+			ehigh += t;
 	}
 
-	Wo = model->Wo;
-	error = 1E-4;
+	float error = 1e-4; /* accumulated error between original and synthesised */
 
 	/* Just test across the harmonics in the first 1000 Hz */
 	for (int l = 1; l <= l_1000hz; l++)
 	{
-		Am.r = 0.0;
-		Am.i = 0.0;
-		den = 0.0;
+		complex_t Am; /* amplitude sample for this band */
 
-		int al = ceilf((l - 0.5) * Wo * FFT_ENC / TWO_PI);
-		int bl = ceilf((l + 0.5) * Wo * FFT_ENC / TWO_PI);
+		Am.r = 0.0f;
+		Am.i = 0.0f;
+
+		float den = 0.0f; /* denominator of Am expression */
+
+		int al = ceilf_fast((l - 0.5f) * Wo_bin);
+		int bl = ceilf_fast((l + 0.5f) * Wo_bin);
 
 		/* Estimate amplitude of harmonic assuming harmonic is totally voiced */
-		offset = FFT_ENC / 2 - l * Wo * FFT_ENC / TWO_PI + 0.5;
+		int offset = FFT_ENC / 2 - l * Wo_bin + 0.5; /* centers Hw[] about current harmonic */
+
+		if (offset < -al)
+			offset = -al;
+		if (offset + bl >= FFT_ENC)
+			offset = FFT_ENC - bl - 1;
+
+		const float *restrict Wp = &W[offset];
+
+		if (al < 0)
+			al = 0;
+		if (bl > FFT_ENC)
+			bl = FFT_ENC;
 
 		for (int m = al; m < bl; m++)
 		{
-			int idx = offset + m;
-			if ((unsigned)idx < FFT_ENC)
-			{
-				Am.r += Sw[m].r * W[idx];
-				Am.i += Sw[m].i * W[idx];
-				den += W[idx] * W[idx];
-			}
+			float w = Wp[m];
+
+			Am.r += Sw[m].r * w;
+			Am.i += Sw[m].i * w;
+			den += w * w;
 		}
+
+		if (den < 1e-12f)
+			continue;
 
 		Am.r = Am.r / den;
 		Am.i = Am.i / den;
@@ -210,50 +233,29 @@ static float est_voicing_mbe(model_t *restrict model, const complex_t *restrict 
 		/* Determine error between estimated harmonic and original */
 		for (int m = al; m < bl; m++)
 		{
-			Ew.r = Sw[m].r - Am.r * W[offset + m];
-			Ew.i = Sw[m].i - Am.i * W[offset + m];
-			error += Ew.r * Ew.r;
-			error += Ew.i * Ew.i;
+			float dr = Sw[m].r - Am.r * Wp[m];
+			float di = Sw[m].i - Am.i * Wp[m];
+			error += dr * dr + di * di;
 		}
 	}
 
-	snr = 10.0 * log10f(sig / error);
-	if (snr > V_THRESH)
+	if (sig > V_THRESH_LIN * error)
 		model->voiced = 1;
 	else
 		model->voiced = 0;
 
 	/* post processing, helps clean up some voicing errors ------------------*/
-	/*
-	   Determine the ratio of low frequency to high frequency energy,
-	   voiced speech tends to be dominated by low frequency energy,
-	   unvoiced by high frequency. This measure can be used to
-	   determine if we have made any gross errors.
-	*/
-	int l_2000hz = model->L * 2000.0f / (SAMP_RATE / 2);
-	int l_4000hz = model->L * 4000.0f / (SAMP_RATE / 2);
-	elow = ehigh = 1E-4;
-	for (int l = 1; l <= l_2000hz; l++)
-	{
-		elow += model->A[l] * model->A[l];
-	}
-	for (int l = l_2000hz; l <= l_4000hz; l++)
-	{
-		ehigh += model->A[l] * model->A[l];
-	}
-	eratio = 10.0 * log10f(elow / ehigh);
-
 	/* Look for Type 1 errors, strongly V speech that has been
 	   accidentally declared UV */
 	if (model->voiced == 0)
-		if (eratio > 10.0)
+		if (elow > 10.0f * ehigh) // >10dB?
 			model->voiced = 1;
 
 	/* Look for Type 2 errors, strongly UV speech that has been
 	   accidentally declared V */
 	if (model->voiced == 1)
 	{
-		if (eratio < -10.0)
+		if (elow < 0.1f * ehigh) // <-10dB?
 			model->voiced = 0;
 
 		/* A common source of Type 2 errors is the pitch estimator
@@ -261,12 +263,10 @@ static float est_voicing_mbe(model_t *restrict model, const complex_t *restrict 
 		   good match with noise due to the close harmoonic spacing.
 		   These errors are much more common than people with 50Hz3
 		   pitch, so we have just a small eratio threshold. */
-		sixty = 60.0f * TWO_PI / SAMP_RATE;
-		if ((eratio < -4.0f) && (model->Wo <= sixty))
+		static const float sixty = 60.0f * TWO_PI / SAMP_RATE;
+		if ((elow < 0.39810717055349725077f * ehigh) && (model->Wo <= sixty)) // <-4dB?
 			model->voiced = 0;
 	}
-
-	return snr;
 }
 
 static void dft_speech(kiss_fft_cfg fft_fwd_cfg, complex_t *Sw, const float *Sn, const float *w)

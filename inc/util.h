@@ -5,6 +5,8 @@ float fast_atan2f(float y, float x);
 float fast_acosf(float x);
 float fast_cosf(float x);
 
+int ceilf_fast(float x);
+
 int codec2_rand(unsigned long *prng_state);
 
 #endif /* CODEC2_MOD_UTIL_H */
