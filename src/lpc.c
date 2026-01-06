@@ -416,7 +416,7 @@ float speech_to_uq_lsps(
         ak[i] *= bw_gamma[i];
     }
 
-    roots = lpc_to_lsp(ak, lsp); // hardcoded to 5 bisections
+    roots = lpc_to_lsp(ak, lsp); // hardcoded to 6 bisections
     if (roots != LPC_ORD)
     {
         /* if root finding fails use some benign LSP values instead */

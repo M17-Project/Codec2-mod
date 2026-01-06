@@ -3,13 +3,11 @@
 #include <math.h>
 
 void interp_Wo(
-    model_t *interp, /* interpolated model params */
-    model_t *prev,   /* previous frames model params */
-    model_t *next    /* next frames model params */
+    model_t *interp,              /* interpolated model params */
+    const model_t *restrict prev, /* previous frames model params */
+    const model_t *restrict next  /* next frames model params */
 )
 {
-    const float weight = 0.5f;
-
     /* trap corner case where voicing est is probably wrong */
     if (interp->voiced && !prev->voiced && !next->voiced)
     {
@@ -20,7 +18,7 @@ void interp_Wo(
     if (interp->voiced)
     {
         if (prev->voiced && next->voiced)
-            interp->Wo = (1.0 - weight) * prev->Wo + weight * next->Wo;
+            interp->Wo = prev->Wo + 0.5f * (next->Wo - prev->Wo); // simple average, but disguised
         if (!prev->voiced && next->voiced)
             interp->Wo = next->Wo;
         if (prev->voiced && !next->voiced)
@@ -43,13 +41,11 @@ float interp_energy(
 }
 
 void interpolate_lsp(
-    float *interp, /* interpolated LSPs */
-    float *prev,   /* prev LSPs */
-    float *next    /* next LSPs */
+    float *interp,              /* interpolated LSPs */
+    const float *restrict prev, /* prev LSPs */
+    const float *restrict next  /* next LSPs */
 )
 {
-    const float weight = 0.5f;
-
     for (int i = 0; i < LPC_ORD; i++)
-        interp[i] = (1.0f - weight) * prev[i] + weight * next[i];
+        interp[i] = prev[i] + 0.5f * (next[i] - prev[i]); // simple average, disguised
 }

@@ -96,6 +96,7 @@ _Static_assert(NDEC == (M_PITCH / DEC), "NDEC must equal M_PITCH / DEC");
 _Static_assert(NLP_NTAP == 48, "NLP FIR unrolling assumes NLP_NTAP == 48");
 _Static_assert(WO_BITS <= 8, "encode_Wo() assumes <= 8-bit fields");
 _Static_assert(E_BITS <= 8, "encode_energy() assumes <= 8-bit fields");
+_Static_assert(TW <= N_SAMP / 2, "Parzen window ramp too long");
 
 /* consts */
 extern const float nlp_fir[NLP_NTAP];

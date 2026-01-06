@@ -4,25 +4,30 @@
 #include <string.h>
 #include <math.h>
 
-static void make_synthesis_window(float *Pn)
+static void make_synthesis_window(float *restrict Pn)
 {
-	float win;
+	static const int n0 = N_SAMP / 2;
+	static const int n1 = 3 * N_SAMP / 2;
+	static const float inv_2TW = 1.0f / (2.0f * TW);
 
 	/* Generate Parzen window in time domain */
-	win = 0.0;
-	for (int i = 0; i < N_SAMP / 2 - TW; i++)
-		Pn[i] = 0.0;
-	win = 0.0;
-	for (int i = N_SAMP / 2 - TW; i < N_SAMP / 2 + TW; win += 1.0 / (2 * TW), i++)
-		Pn[i] = win;
-	for (int i = N_SAMP / 2 + TW; i < 3 * N_SAMP / 2 - TW; i++)
-		Pn[i] = 1.0;
-	win = 1.0;
-	for (int i = 3 * N_SAMP / 2 - TW; i < 3 * N_SAMP / 2 + TW;
-		 win -= 1.0f / (2.0f * TW), i++)
-		Pn[i] = win;
-	for (int i = 3.0f * N_SAMP / 2.0f + TW; i < 2 * N_SAMP; i++)
-		Pn[i] = 0.0;
+	/* zero */
+	memset(Pn, 0, (n0 - TW) * sizeof(float));
+
+	/* ramp up */
+	for (int i = n0 - TW; i < n0 + TW; i++)
+		Pn[i] = (i - (n0 - TW)) * inv_2TW;
+
+	/* flat */
+	for (int i = n0 + TW; i < n1 - TW; i++)
+		Pn[i] = 1.0f;
+
+	/* ramp down */
+	for (int i = n1 - TW; i < n1 + TW; i++)
+		Pn[i] = ((n1 + TW) - i) * inv_2TW;
+
+	/* zero */
+	memset(&Pn[n1 + TW], 0, (2 * N_SAMP - (n1 + TW)) * sizeof(float));
 }
 
 static void sample_phase(
@@ -31,10 +36,12 @@ static void sample_phase(
 	const complex_t *restrict A /* LPC analysis filter in freq domain */
 )
 {
+	const float k = model->Wo / FFT_R; // pre-compute
+
 	/* Sample phase at harmonics */
 	for (int m = 1; m <= model->L; m++)
 	{
-		int b = (int)(m * model->Wo / FFT_R + 0.5);
+		int b = (int)(m * k + 0.5);
 
 		// clamp b
 		if (b >= FFT_ENC / 2)
@@ -94,7 +101,7 @@ static void phase_synth_zero_order(
 		A_[m].i = H[m].i * Ex[m].r + H[m].r * Ex[m].i;
 
 		/* modify sinusoidal phase */
-		new_phi = fast_atan2f(A_[m].i, A_[m].r + 1E-12);
+		new_phi = fast_atan2f(A_[m].i, A_[m].r + 1e-12);
 		model->phi[m] = new_phi;
 	}
 }
@@ -102,7 +109,7 @@ static void phase_synth_zero_order(
 static void postfilter(codec2_t *restrict c2, model_t *restrict model, float *restrict bg_est)
 {
 	/* determine average energy across spectrum */
-	float e = 1E-12;
+	float e = 1e-12;
 	for (int m = 1; m <= model->L; m++)
 		e += model->A[m] * model->A[m];
 
@@ -248,5 +255,5 @@ void synthesise_one_frame(
 
 void synthesis_init(codec2_t *c2)
 {
-    make_synthesis_window(c2->Pn);
+	make_synthesis_window(c2->Pn);
 }
