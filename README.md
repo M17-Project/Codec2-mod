@@ -37,7 +37,6 @@ Compared to the reference Codec2 implementation, this fork already includes:
 - Fully deterministic, fixed-size codec state suitable for static allocation
 - Reduced overall memory footprint compared to the reference implementation
 - Verified bitstream compatibility with the reference Codec2 encoder
-- Initial ViSQOL evaluation shows a small MOS improvement in decoded audio compared to the reference implementation
 
 These changes establish a stable and minimal baseline for further optimization and experimentation.
 
