@@ -1,6 +1,8 @@
 #ifndef CODEC2_MOD_LPC_H
 #define CODEC2_MOD_LPC_H
 
+#include "codec2_internal.h"
+
 void aks_to_mag2(
     codec2_t *c2,
     const float *ak,

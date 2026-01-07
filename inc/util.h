@@ -1,6 +1,7 @@
 #ifndef CODEC2_MOD_UTIL_H
 #define CODEC2_MOD_UTIL_H
 
+#include <stdint.h>
 #include <math.h>
 
 float fast_atan2f(float y, float x);

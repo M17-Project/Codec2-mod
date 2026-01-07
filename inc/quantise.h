@@ -1,6 +1,8 @@
 #ifndef CODEC2_MOD_QUANTISE_H
 #define CODEC2_MOD_QUANTISE_H
 
+#include <stdint.h>
+
 void pack(uint8_t *bitArray, unsigned int *bitIndex,
           unsigned int field, unsigned int fieldWidth);
 
