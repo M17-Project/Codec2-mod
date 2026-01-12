@@ -40,6 +40,15 @@ Compared to the reference Codec2 implementation, this fork already includes:
 
 These changes establish a stable and minimal baseline for further optimization and experimentation.
 
+## Speed comparison
+
+STM32F405 at 168 MHz, FPU enabled, *-Os* optimizations:
+
+| Task                  | Reference Codec2  | Codec2-mod | Gain  |
+|-----------------------|-------------------|------------|-------|
+| Encoding 1,000 frames | 9.804 s           | 4.341 s    | 2.25x |
+| Decoding 1,000 frames | 11.487 s          | 9.612 s    | 1.2x  |
+
 ## Branches
 
 The `main` branch offers an encoder that is bitstream-compatible with the reference Codec2 implementation.
