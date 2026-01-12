@@ -61,7 +61,6 @@ static void phase_synth_zero_order(
 	const complex_t *H /* L synthesis filter freq domain samples */
 )
 {
-	float new_phi;
 	complex_t Ex[MAX_AMP + 1]; /* excitation samples */
 	complex_t A_[MAX_AMP + 1]; /* synthesised harmonic samples */
 
@@ -79,15 +78,26 @@ static void phase_synth_zero_order(
 
 	static const float k = TWO_PI / CODEC2_RAND_MAX;
 
+	float sin_phi0, cos_phi0;
+	codec2_sincosf(phi0, &sin_phi0, &cos_phi0);
+
+	// m = 1 initial value
+	float sin_m = sin_phi0;
+	float cos_m = cos_phi0;
+
 	for (int m = 1; m <= model->L; m++)
 	{
 		/* generate excitation */
 		if (model->voiced)
 		{
-			float s, c;
-			codec2_sincosf(phi0 * m, &s, &c);
-			Ex[m].r = c;
-			Ex[m].i = s;
+			Ex[m].r = cos_m;
+			Ex[m].i = sin_m;
+
+			/* advance oscillator */
+			float sin_next = sin_m * cos_phi0 + cos_m * sin_phi0;
+			float cos_next = cos_m * cos_phi0 - sin_m * sin_phi0;
+			sin_m = sin_next;
+			cos_m = cos_next;
 		}
 		else
 		{
@@ -107,8 +117,16 @@ static void phase_synth_zero_order(
 		A_[m].i = H[m].i * Ex[m].r + H[m].r * Ex[m].i;
 
 		/* modify sinusoidal phase */
-		new_phi = fast_atan2f(A_[m].i, A_[m].r + 1e-12);
-		model->phi[m] = new_phi;
+		model->phi[m] = fast_atan2f(A_[m].i, A_[m].r + 1e-12);
+
+		/* re-normalize every 8 harmonics */
+		if ((m & 7) == 0)
+		{
+			float r = sin_m*sin_m + cos_m*cos_m;
+			float inv = 1.0f / sqrtf(r);
+			sin_m *= inv;
+			cos_m *= inv;
+		}
 	}
 }
 
