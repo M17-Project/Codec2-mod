@@ -41,7 +41,7 @@ static void sample_phase(
 	/* Sample phase at harmonics */
 	for (int m = 1; m <= model->L; m++)
 	{
-		int b = (int)(m * k + 0.5);
+		int b = (int)(m * k + 0.5f);
 
 		// clamp b
 		if (b >= FFT_ENC / 2)
@@ -74,7 +74,7 @@ static void phase_synth_zero_order(
 	   ex_phase[0] += (*prev_Wo+model->Wo)*N_SAMP/2;
 	*/
 	ex_phase[0] += (model->Wo) * N_SAMP;
-	ex_phase[0] -= TWO_PI * floorf(ex_phase[0] / TWO_PI + 0.5);
+	ex_phase[0] -= TWO_PI * floorf(ex_phase[0] / TWO_PI + 0.5f);
 	float phi0 = ex_phase[0];
 
 	static const float k = TWO_PI / CODEC2_RAND_MAX;
@@ -107,7 +107,7 @@ static void phase_synth_zero_order(
 		A_[m].i = H[m].i * Ex[m].r + H[m].r * Ex[m].i;
 
 		/* modify sinusoidal phase */
-		new_phi = fast_atan2f(A_[m].i, A_[m].r + 1e-12);
+		new_phi = fast_atan2f(A_[m].i, A_[m].r + 1e-12f);
 		model->phi[m] = new_phi;
 	}
 }
@@ -117,11 +117,11 @@ static void postfilter(codec2_t *restrict c2, model_t *restrict model, float *re
 	static const float k = TWO_PI / CODEC2_RAND_MAX;
 
 	/* determine average energy across spectrum */
-	float e = 1e-12;
+	float e = 1e-12f;
 	for (int m = 1; m <= model->L; m++)
 		e += model->A[m] * model->A[m];
 
-	e = 10.0 * log10f(e / model->L);
+	e = 10.0f * log10f(e / model->L);
 
 	/* If beneath threshold, update bg estimate.  The idea
 	   of the threshold is to prevent updating during high level
@@ -129,7 +129,7 @@ static void postfilter(codec2_t *restrict c2, model_t *restrict model, float *re
 	if (!model->voiced)
 	{
 		if (e < BG_THRESH)
-			*bg_est = *bg_est * (1.0 - BG_BETA) + e * BG_BETA;
+			*bg_est = *bg_est * (1.0f - BG_BETA) + e * BG_BETA;
 	}
 	else
 	{
@@ -194,7 +194,7 @@ static void synthesise(
 	{
 		/* Update memories */
 		memmove(Sn_, &Sn_[N_SAMP], (N_SAMP - 1) * sizeof(float));
-		Sn_[N_SAMP - 1] = 0.0;
+		Sn_[N_SAMP - 1] = 0.0f;
 	}
 
 	memset(Sw_, 0, (FFT_DEC / 2 + 1) * sizeof(complex_t)); // original Sw_ size was this
@@ -204,7 +204,7 @@ static void synthesise(
 
 	for (int l = 1; l <= model->L; l++)
 	{
-		int b = (int)(l * Wo_bin + 0.5); // FFT_DEC == FFT_ENC
+		int b = (int)(l * Wo_bin + 0.5f); // FFT_DEC == FFT_ENC
 		if (b > ((FFT_DEC / 2) - 1))
 		{
 			b = (FFT_DEC / 2) - 1;

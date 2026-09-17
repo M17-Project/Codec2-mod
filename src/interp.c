@@ -29,7 +29,7 @@ void interp_Wo(
         interp->Wo = W0_MIN;
     }
 
-    interp->L = M_PI / interp->Wo;
+    interp->L = (float)M_PI / interp->Wo;
 }
 
 float interp_energy(

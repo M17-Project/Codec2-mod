@@ -23,7 +23,7 @@ static void autocorrelate(
 {
     for (int j = 0; j < LPC_ORD + 1; j++)
     {
-        Rn[j] = 0.0;
+        Rn[j] = 0.0f;
         for (int i = 0; i < M_PITCH - j; i++)
             Rn[j] += Sn[i] * Sn[i + j];
     }
@@ -133,7 +133,7 @@ static int lpc_to_lsp(
 
     /* Search for a zero in P'(z) polynomial first and then alternate to Q'(z).
     Keep alternating between the two polynomials as each zero is found 	*/
-    xl = 1.0; /* start at point xl = 1 		*/
+    xl = 1.0f; /* start at point xl = 1 		*/
     const float delta = LSP_DELTA1;
 
     for (int j = 0; j < LPC_ORD; j++)
@@ -224,8 +224,8 @@ void lsp_to_lpc(
     /* initialise contents of array */
     memset(Wp, 0, sizeof(Wp));
 
-    xin1 = 1.0;
-    xin2 = 1.0;
+    xin1 = 1.0f;
+    xin2 = 1.0f;
 
     /* reconstruct P(z) and Q(z) by cascading second order polynomials
       in form 1 - 2xz(-1) +z(-2), where x is the LSP coefficient */
@@ -250,13 +250,13 @@ void lsp_to_lpc(
         xout1 = xin1 + *(n4 + 1);
         xout2 = xin2 - *(n4 + 2);
 
-        ak[j] = (xout1 + xout2) * 0.5;
+        ak[j] = (xout1 + xout2) * 0.5f;
 
         *(n4 + 1) = xin1;
         *(n4 + 2) = xin2;
 
-        xin1 = 0.0;
-        xin2 = 0.0;
+        xin1 = 0.0f;
+        xin2 = 0.0f;
     }
 }
 
@@ -360,7 +360,7 @@ void aks_to_mag2(codec2_t *c2,
    This helps improve low pitch males after LPC modelling. */
 void apply_lpc_correction(model_t *model)
 {
-    if (model->Wo < (M_PI * 150.0f / 4000.0f))
+    if (model->Wo < ((float)M_PI * 150.0f / 4000.0f))
     {
         model->A[1] *= 0.032f;
     }
@@ -381,7 +381,7 @@ float speech_to_uq_lsps(
 
     float *Wn = (float *)c2->fft_buffer;
 
-    e = 0.0;
+    e = 0.0f;
     for (int i = 0; i < M_PITCH; i++)
     {
         Wn[i] = Sn[i] * w[i];
@@ -392,7 +392,7 @@ float speech_to_uq_lsps(
     if (e < LPC_ENERGY_FLOOR)
     {
         for (int i = 0; i < LPC_ORD; i++)
-            lsp[i] = (M_PI / LPC_ORD) * (float)i;
+            lsp[i] = ((float)M_PI / LPC_ORD) * (float)i;
 
         memset(ak, 0, (LPC_ORD + 1) * sizeof(float));
         ak[0] = 1.0f;
@@ -421,7 +421,7 @@ float speech_to_uq_lsps(
     {
         /* if root finding fails use some benign LSP values instead */
         for (int i = 0; i < LPC_ORD; i++)
-            lsp[i] = (M_PI / LPC_ORD) * (float)i;
+            lsp[i] = ((float)M_PI / LPC_ORD) * (float)i;
     }
 
     *energy = E;

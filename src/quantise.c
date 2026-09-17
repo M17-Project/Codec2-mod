@@ -133,7 +133,7 @@ float decode_energy(int index, int bits)
 
 void encode_lspds_scalar(int *indexes, const float *lsp)
 {
-	static const float k = 4000.0f / M_PI;
+	static const float k = 4000.0f / (float)M_PI;
 	int last_q_hz = 0;
 
 	for (int i = 0; i < LPC_ORD; i++)
@@ -192,7 +192,7 @@ void encode_lspds_scalar(int *indexes, const float *lsp)
 void decode_lspds_scalar(float *lsp_, const int *indexes)
 {
 	int lsp_hz = 0;
-	static const float k = M_PI / 4000.0f;
+	static const float k = (float)M_PI / 4000.0f;
 
 	for (int i = 0; i < LPC_ORD; i++)
 	{

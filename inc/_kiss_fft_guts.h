@@ -125,29 +125,43 @@ struct kiss_fft_state{
 
 
 #ifdef FIXED_POINT
-#  define KISS_FFT_COS(phase)  floor(.5+SAMP_MAX * cos (phase))
-#  define KISS_FFT_SIN(phase)  floor(.5+SAMP_MAX * sin (phase))
+#  define KISS_FFT_COS(phase)  floor(0.5f+SAMP_MAX * cos (phase))
+#  define KISS_FFT_SIN(phase)  floor(0.5f+SAMP_MAX * sin (phase))
 #  define HALF_OF(x) ((x)>>1)
 #elif defined(USE_SIMD)
 #  define KISS_FFT_COS(phase) _mm_set1_ps( cos(phase) )
 #  define KISS_FFT_SIN(phase) _mm_set1_ps( sin(phase) )
-#  define HALF_OF(x) ((x)*_mm_set1_ps(.5))
+#  define HALF_OF(x) ((x)*_mm_set1_ps(0.5f))
 #else
 #  define KISS_FFT_COS(phase) (kiss_fft_scalar) cos(phase)
 #  define KISS_FFT_SIN(phase) (kiss_fft_scalar) sin(phase)
-#  define HALF_OF(x) ((x)*((kiss_fft_scalar).5))
+#  define HALF_OF(x) ((x)*((kiss_fft_scalar)0.5f))
 #endif
 
-#define  kf_cexp(x,phase) \
-    do{ \
+#if defined(__has_builtin)
+#  if __has_builtin(__builtin_sincosf)
+#    define sincosf __builtin_sincosf
+#    define HAS_SINCOSF 1
+#  endif
+#endif
+
+
+#if 0//(!defined(FIXED_POINT) || !defined(USE_SIMD)) && HAS_SINCOSF
+#  define  kf_cexp(x,phase) \
+     do{ \
+       sincosf(phase, &(x)->i, &(x)->r);\
+     }while(0)
+#else // use the default kiss fft function
+#  define  kf_cexp(x,phase) \
+     do{ \
         (x)->r = KISS_FFT_COS(phase);\
         (x)->i = KISS_FFT_SIN(phase);\
-    }while(0)
-
+      }while(0)
+#endif
 
 /* a debugging function */
 #define pcpx(c)\
-    KISS_FFT_DEBUG("%g + %gi\n",(double)((c)->r),(double)((c)->i))
+    KISS_FFT_DEBUG("%g + %gi\n",(float)((c)->r),(float)((c)->i))
 
 
 #ifdef KISS_FFT_USE_ALLOCA

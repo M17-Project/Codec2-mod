@@ -83,15 +83,15 @@ static float post_process_sub_multiples(complex_t *Fw, float gmax, int gmax_bin,
     while (gmax_bin / mult >= min_bin)
     {
         b = gmax_bin / mult; /* determine search interval */
-        bmin = 0.8 * b;
-        bmax = 1.2 * b;
+        bmin = 0.8f * b;
+        bmax = 1.2f * b;
         if (bmin < min_bin)
             bmin = min_bin;
 
         /* lower threshold to favour previous frames pitch estimate,
             this is a form of pitch tracking */
         if ((prev_f0_bin > bmin) && (prev_f0_bin < bmax))
-            thresh = CNLP * 0.5 * gmax;
+            thresh = CNLP * 0.5f * gmax;
         else
             thresh = CNLP * gmax;
 
@@ -154,14 +154,14 @@ float nlp(
         notch += COEFF * nlp->mem_y;
         nlp->mem_x = nlp->sq[i];
         nlp->mem_y = notch;
-        nlp->sq[i] = notch + 1.0; /* With 0 input vectors to codec,
-                                     kiss_fft() would take a long
-                                     time to execute when running in
-                                     real time.  Problem was traced
-                                     to kiss_fft function call in
-                                     this function. Adding this small
-                                     constant fixed problem.  Not
-                                     exactly sure why. */
+        nlp->sq[i] = notch + 1.0f; /* With 0 input vectors to codec,
+                                      kiss_fft() would take a long
+                                      time to execute when running in
+                                      real time.  Problem was traced
+                                      to kiss_fft function call in
+                                      this function. Adding this small
+                                      constant fixed problem.  Not
+                                      exactly sure why. */
     }
 
     /* decimating polyphase FIR filter */
@@ -249,11 +249,11 @@ void nlp_init(nlp_t *nlp)
 
     for (int i = 0; i < NDEC; i++)
     {
-        nlp->w[i] = 0.5 - 0.5 * cosf(TWO_PI * i / (NDEC - 1));
+        nlp->w[i] = 0.5f - 0.5f * cosf(TWO_PI * i / (NDEC - 1));
     }
 
     memset(nlp->sq, 0, sizeof(nlp->sq));
 
-    nlp->mem_x = 0.0;
-    nlp->mem_y = 0.0;
+    nlp->mem_x = 0.0f;
+    nlp->mem_y = 0.0f;
 }

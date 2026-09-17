@@ -64,7 +64,7 @@ static void hs_pitch_refinement(model_t *restrict model, const complex_t *restri
 	float Em;  /* mamimum energy */
 
 	/* Initialisation */
-	model->L = M_PI / model->Wo; /* use initial pitch est. for L */
+	model->L = (float)M_PI / model->Wo; /* use initial pitch est. for L */
 	Wom = model->Wo;
 	Em = 0.0f;
 
@@ -110,13 +110,13 @@ static void two_stage_pitch_refinement(model_t *restrict model, const complex_t 
 	/* Coarse refinement */
 	pmax = TWO_PI / model->Wo + 5;
 	pmin = TWO_PI / model->Wo - 5;
-	pstep = 1.0;
+	pstep = 1.0f;
 	hs_pitch_refinement(model, Sw, pmin, pmax, pstep);
 
 	/* Fine refinement */
 	pmax = TWO_PI / model->Wo + 1;
 	pmin = TWO_PI / model->Wo - 1;
-	pstep = 0.25;
+	pstep = 0.25f;
 	hs_pitch_refinement(model, Sw, pmin, pmax, pstep);
 
 	/* Limit range */
@@ -125,10 +125,10 @@ static void two_stage_pitch_refinement(model_t *restrict model, const complex_t 
 	if (model->Wo > TWO_PI / P_MIN)
 		model->Wo = TWO_PI / P_MIN;
 
-	model->L = floorf(M_PI / model->Wo);
+	model->L = floorf((float)M_PI / model->Wo);
 
 	/* trap occasional round off issues with floorf() */
-	if (model->Wo * model->L >= 0.95 * M_PI)
+	if (model->Wo * model->L >= 0.95f * (float)M_PI)
 	{
 		model->L--;
 	}
@@ -161,7 +161,7 @@ static void estimate_amplitudes(model_t *model, const complex_t *Sw, int est_pha
 		/* recompute phases only for voiced speech :-) */
 		if (est_phase && model->voiced)
 		{
-			int b = (int)(m * model->Wo / FFT_R + 0.5); /* DFT bin of centre of current harmonic */
+			int b = (int)(m * model->Wo / FFT_R + 0.5f); /* DFT bin of centre of current harmonic */
 			if (b >= FFT_ENC / 2)
 				b = FFT_ENC / 2 - 1;
 
@@ -187,7 +187,7 @@ static void est_voicing_mbe(model_t *restrict model, const complex_t *restrict S
 	const int l_2000hz = model->L * 2000.0f / (SAMP_RATE / 2);
 	const int l_4000hz = model->L * 4000.0f / (SAMP_RATE / 2);
 
-	float sig = 1e-4, elow = 1e-4, ehigh = 1e-4;
+	float sig = 1e-4f, elow = 1e-4f, ehigh = 1e-4f;
 	for (int l = 1; l <= l_4000hz; l++)
 	{
 		float t = model->A[l] * model->A[l];
@@ -202,7 +202,7 @@ static void est_voicing_mbe(model_t *restrict model, const complex_t *restrict S
 			ehigh += t;
 	}
 
-	float error = 1e-4; /* accumulated error between original and synthesised */
+	float error = 1e-4f; /* accumulated error between original and synthesised */
 
 	/* Just test across the harmonics in the first 1000 Hz */
 	for (int l = 1; l <= l_1000hz; l++)
@@ -218,7 +218,7 @@ static void est_voicing_mbe(model_t *restrict model, const complex_t *restrict S
 		int bl = ceilf_fast((l + 0.5f) * Wo_bin);
 
 		/* Estimate amplitude of harmonic assuming harmonic is totally voiced */
-		int offset = FFT_ENC / 2 - l * Wo_bin + 0.5; /* centers Hw[] about current harmonic */
+		int offset = FFT_ENC / 2 - l * Wo_bin + 0.5f; /* centers Hw[] about current harmonic */
 
 		if (offset < -al)
 			offset = -al;
@@ -323,7 +323,7 @@ void analyse_one_frame(
 	/* Estimate pitch */
 	nlp(&c2->nlp, c2->Sn, &pitch, &c2->prev_f0_enc);
 	model->Wo = TWO_PI / pitch;
-	model->L = M_PI / model->Wo;
+	model->L = (float)M_PI / model->Wo;
 
 	/* estimate model parameters */
 	two_stage_pitch_refinement(model, Sw);

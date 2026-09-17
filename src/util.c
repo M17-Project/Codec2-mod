@@ -4,8 +4,8 @@
 /* faster than atan2f(), but approximate (good enough) */
 float fast_atan2f(float y, float x)
 {
-	static const float ONEQTR_PI = M_PI * 0.25f;
-	static const float THRQTR_PI = M_PI * 0.75f;
+	static const float ONEQTR_PI = (float)M_PI * 0.25f;
+	static const float THRQTR_PI = (float)M_PI * 0.75f;
 
 	float r, angle;
 	float abs_y = fabsf(y) + 1e-12f;
@@ -50,13 +50,13 @@ float fast_acosf(float x)
 /* this is enough for LSP space and avoids all the cosf() overhead */
 float fast_cosf(float x)
 {
-	static const float PI_2 = M_PI / 2.0f;
+	static const float PI_2 = (float)M_PI / 2.0f;
 	float sign = 1.0f;
 
 	/* Fold to [0, pi/2] */
 	if (x > PI_2)
 	{				  /* pi/2 */
-		x = M_PI - x; /* pi - x */
+		x = (float)M_PI - x; /* pi - x */
 		sign = -1.0f;
 	}
 

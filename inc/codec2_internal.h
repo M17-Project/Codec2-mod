@@ -16,7 +16,7 @@
 #define M_PI 3.14159265358979323846
 #endif
 
-#define TWO_PI (2.0f * M_PI)
+#define TWO_PI (2.0f * (float)M_PI)
 
 #ifndef POW10F
 #define POW10F(x) powf(10.0f, (x))
@@ -25,12 +25,12 @@
 #define BYTES_PER_FRAME 8
 #define SAMPLES_PER_FRAME (2 * N_SAMP)
 
-#define N_S 0.01
+#define N_S 0.01f
 #define MAX_AMP 80
 
 #define FFT_ENC 512
 #define FFT_DEC 512
-#define V_THRESH 6.0
+#define V_THRESH 6.0f
 #define V_THRESH_LIN (powf(10.0f, V_THRESH * 0.1f))
 #define LPC_ORD 10
 
@@ -41,18 +41,18 @@
 #define M_PITCH 320
 #define P_MIN 20
 #define P_MAX 160
-#define W0_MIN ((2.0 * M_PI) / 160.0)
-#define W0_MAX ((2.0 * M_PI) / 20.0)
+#define W0_MIN (TWO_PI / 160.0f)
+#define W0_MAX (TWO_PI / 20.0f)
 #define NW 279
 #define TW 40
 
 #define PMAX_M 320
-#define COEFF 0.95
+#define COEFF 0.95f
 #define PE_FFT_SIZE 512
 #define DEC 5
 #define NDEC (M_PITCH / DEC)
-#define T 0.1
-#define CNLP 0.3
+#define T 0.1f
+#define CNLP 0.3f
 #define NLP_NTAP 48
 #define NLP_NPHASE DEC
 #define NLP_TAPS_PP ((NLP_NTAP + DEC - 1) / DEC)
@@ -61,17 +61,17 @@
 #define WO_LEVELS (1 << WO_BITS)
 #define E_BITS 5
 #define E_LEVELS (1 << E_BITS)
-#define E_MIN_DB -10.0
-#define E_MAX_DB 40.0
+#define E_MIN_DB -10.0f
+#define E_MAX_DB 40.0f
 #define LSPD_SCALAR_INDEXES 10
 
-#define LPCPF_GAMMA 0.5
-#define LPCPF_BETA 0.2
-#define LPCPF_TWO_BETA (2.0 * LPCPF_BETA)
-#define LSP_DELTA1 0.01
-#define BG_THRESH 40.0
-#define BG_BETA 0.1
-#define BG_MARGIN 6.0
+#define LPCPF_GAMMA 0.5f
+#define LPCPF_BETA 0.2f
+#define LPCPF_TWO_BETA (2.0f * LPCPF_BETA)
+#define LSP_DELTA1 0.01f
+#define BG_THRESH 40.0f
+#define BG_BETA 0.1f
+#define BG_MARGIN 6.0f
 #define LPC_ENERGY_FLOOR 1e-6f
 
 #define FFT_R (TWO_PI / FFT_ENC)

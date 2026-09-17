@@ -45,14 +45,14 @@ void codec2_init(codec2_t *c2)
 		c2->prev_model_dec.A[l] = 0.0;
 
 	c2->prev_model_dec.Wo = TWO_PI / P_MAX;
-	c2->prev_model_dec.L = M_PI / c2->prev_model_dec.Wo;
+	c2->prev_model_dec.L = (float)M_PI / c2->prev_model_dec.Wo;
 	c2->prev_model_dec.voiced = 0;
 	memset(c2->prev_model_dec.phi, 0, sizeof(c2->prev_model_dec.phi));
 	c2->ex_phase = 0.0f;
 
 	for (int i = 0; i < LPC_ORD; i++)
 	{
-		c2->prev_lsps_dec[i] = i * M_PI / (LPC_ORD + 1);
+		c2->prev_lsps_dec[i] = i * (float)M_PI / (LPC_ORD + 1);
 	}
 	c2->prev_e_dec = 1;
 
@@ -112,7 +112,7 @@ void codec2_decode(codec2_t *c2, int16_t *speech, const uint8_t *bits)
 
 	Wo_index = unpack(bits, &nbit, WO_BITS);
 	model[1].Wo = decode_Wo(Wo_index, WO_BITS);
-	model[1].L = M_PI / model[1].Wo;
+	model[1].L = (float)M_PI / model[1].Wo;
 
 	e_index = unpack(bits, &nbit, E_BITS);
 	e[1] = decode_energy(e_index, E_BITS);
