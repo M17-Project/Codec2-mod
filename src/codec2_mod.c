@@ -9,7 +9,7 @@
 
 void codec2_init(codec2_t *c2)
 {
-	c2->next_rn = 1; // random number geterator - seed
+	c2->next_rn = 1; // random number generator - seed
 
 	for (int i = 0; i < M_PITCH; i++)
 		c2->Sn[i] = 1.0f;
