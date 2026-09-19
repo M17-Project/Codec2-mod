@@ -146,7 +146,8 @@ struct kiss_fft_state{
 #endif
 
 
-#if 0//(!defined(FIXED_POINT) || !defined(USE_SIMD)) && HAS_SINCOSF
+#if !defined(FIXED_POINT) && !defined(USE_SIMD) && HAS_SINCOSF
+#  pragma message "kf_cexp: using sincosf (fast path)"
 #  define  kf_cexp(x,phase) \
      do{ \
        sincosf(phase, &(x)->i, &(x)->r);\
