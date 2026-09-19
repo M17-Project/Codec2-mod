@@ -9,57 +9,66 @@
 
 void codec2_init(codec2_t *c2)
 {
-	c2->next_rn = 1; // random number geterator - seed
+	codec2_encoder_init(&c2->encoder);
+	codec2_decoder_init(&c2->decoder);
+}
 
+void codec2_encoder_init(codec2_encoder_t *c2)
+{
 	for (int i = 0; i < M_PITCH; i++)
 		c2->Sn[i] = 1.0f;
 
-	memset(c2->Sn_, 0, sizeof(c2->Sn_));
-
-	/* static FFT mem allocations */
 	size_t mem;
 
-	/* FFT forward */
 	mem = sizeof(c2->fft_fwd_mem);
 	c2->fft_fwd_cfg = kiss_fft_alloc(FFT_ENC, 0, c2->fft_fwd_mem, &mem);
 
-	/* FFT real forward */
 	mem = sizeof(c2->fftr_fwd_mem);
 	c2->fftr_fwd_cfg = kiss_fftr_alloc(FFT_ENC, 0, c2->fftr_fwd_mem, &mem);
 
-	/* FFT real inverse */
-	mem = sizeof(c2->fftr_inv_mem);
-	c2->fftr_inv_cfg = kiss_fftr_alloc(FFT_DEC, 1, c2->fftr_inv_mem, &mem);
-
-	/* NLP FFT - reused (same type, direction, and size) */
 	c2->nlp.fftr_cfg = c2->fftr_fwd_cfg;
 
 	analysis_init(c2);
-	synthesis_init(c2);
 
 	c2->prev_f0_enc = 1.0f / P_MAX_S;
-	c2->bg_est = 0.0;
-	c2->ex_phase = 0.0;
+
+	nlp_init(&c2->nlp);
+}
+
+void codec2_decoder_init(codec2_decoder_t *c2)
+{
+	c2->next_rn = 1;
+
+	memset(c2->Sn_, 0, sizeof(c2->Sn_));
+
+	size_t mem;
+
+	mem = sizeof(c2->fftr_fwd_mem);
+	c2->fftr_fwd_cfg = kiss_fftr_alloc(FFT_ENC, 0, c2->fftr_fwd_mem, &mem);
+
+	mem = sizeof(c2->fftr_inv_mem);
+	c2->fftr_inv_cfg = kiss_fftr_alloc(FFT_DEC, 1, c2->fftr_inv_mem, &mem);
+
+	synthesis_init(c2);
+
+	c2->bg_est = 0.0f;
+	c2->ex_phase = 0.0f;
 
 	for (int l = 1; l <= MAX_AMP; l++)
-		c2->prev_model_dec.A[l] = 0.0;
+		c2->prev_model_dec.A[l] = 0.0f;
 
 	c2->prev_model_dec.Wo = TWO_PI / P_MAX;
 	c2->prev_model_dec.L = (float)M_PI / c2->prev_model_dec.Wo;
 	c2->prev_model_dec.voiced = 0;
 	memset(c2->prev_model_dec.phi, 0, sizeof(c2->prev_model_dec.phi));
-	c2->ex_phase = 0.0f;
 
 	for (int i = 0; i < LPC_ORD; i++)
-	{
 		c2->prev_lsps_dec[i] = i * (float)M_PI / (LPC_ORD + 1);
-	}
-	c2->prev_e_dec = 1;
 
-	nlp_init(&c2->nlp);
+	c2->prev_e_dec = 1;
 }
 
-void codec2_encode(codec2_t *c2, uint8_t *bits, const int16_t *speech)
+void codec2_encode(codec2_encoder_t *c2, uint8_t *bits, const int16_t *speech)
 {
 	model_t model = {0};
 	float ak[LPC_ORD + 1];
@@ -92,7 +101,7 @@ void codec2_encode(codec2_t *c2, uint8_t *bits, const int16_t *speech)
 	}
 }
 
-void codec2_decode(codec2_t *c2, int16_t *speech, const uint8_t *bits)
+void codec2_decode(codec2_decoder_t *c2, int16_t *speech, const uint8_t *bits)
 {
 	model_t model[2] = {0};
 	int lspd_indexes[LPC_ORD];

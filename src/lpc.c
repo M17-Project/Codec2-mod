@@ -260,12 +260,12 @@ void lsp_to_lpc(
     }
 }
 
-void aks_to_mag2(codec2_t *c2,
-                        const float *ak, /* LPCs */
-                        model_t *model,  /* sinusoidal model parameters for this frame */
-                        float E,         /* energy term */
-                        complex_t *Aw,   /* output power spectrum */
-                        float *A2)
+void aks_to_mag2(codec2_decoder_t *c2,
+                 const float *ak, /* LPCs */
+                 model_t *model,  /* sinusoidal model parameters for this frame */
+                 float E,         /* energy term */
+                 complex_t *Aw,   /* output power spectrum */
+                 float *A2)
 {
     int am, bm; /* limits of current band */
 
@@ -367,7 +367,7 @@ void apply_lpc_correction(model_t *model)
 }
 
 float speech_to_uq_lsps(
-    codec2_t *c2,
+    codec2_encoder_t *c2,
     float *restrict lsp,
     float *restrict ak,
     float *restrict energy,

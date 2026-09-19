@@ -4,7 +4,7 @@
 #include "codec2_internal.h"
 
 void aks_to_mag2(
-    codec2_t *c2,
+    codec2_decoder_t *c2,
     const float *ak,
     model_t *model,
     float E,
@@ -12,7 +12,7 @@ void aks_to_mag2(
     float *A2);
 
 float speech_to_uq_lsps(
-    codec2_t *c2,
+    codec2_encoder_t *c2,
     float *restrict lsp,
     float *restrict ak,
     float *restrict energy,

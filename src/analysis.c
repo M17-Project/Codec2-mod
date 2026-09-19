@@ -4,7 +4,7 @@
 #include "util.h"
 
 static void make_analysis_window(
-	codec2_t *c2,
+	codec2_encoder_t *c2,
 	kiss_fft_cfg fft_fwd_cfg,
 	float *restrict w,
 	float *restrict W)
@@ -305,7 +305,7 @@ static void dft_speech(kiss_fft_cfg fft_fwd_cfg, complex_t *Sw, const float *Sn,
 }
 
 void analyse_one_frame(
-	codec2_t *c2,
+	codec2_encoder_t *c2,
 	model_t *model,
 	const int16_t *speech)
 {
@@ -333,7 +333,7 @@ void analyse_one_frame(
 	est_voicing_mbe(model, Sw, c2->W);
 }
 
-void analysis_init(codec2_t *c2)
+void analysis_init(codec2_encoder_t *c2)
 {
 	make_analysis_window(c2, c2->fft_fwd_cfg, c2->w, c2->W);
 }
