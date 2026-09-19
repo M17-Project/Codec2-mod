@@ -48,7 +48,6 @@ void codec2_init(codec2_t *c2)
 	c2->prev_model_dec.L = M_PI / c2->prev_model_dec.Wo;
 	c2->prev_model_dec.voiced = 0;
 	memset(c2->prev_model_dec.phi, 0, sizeof(c2->prev_model_dec.phi));
-	c2->ex_phase = 0.0f;
 
 	for (int i = 0; i < LPC_ORD; i++)
 	{
