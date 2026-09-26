@@ -55,7 +55,7 @@ static void sample_phase(
 }
 
 static void phase_synth_zero_order(
-	codec2_t *c2,
+	codec2_decoder_t *c2,
 	model_t *model,
 	float *ex_phase,   /* excitation phase of fundamental        */
 	const complex_t *H /* L synthesis filter freq domain samples */
@@ -112,7 +112,7 @@ static void phase_synth_zero_order(
 	}
 }
 
-static void postfilter(codec2_t *restrict c2, model_t *restrict model, float *restrict bg_est)
+static void postfilter(codec2_decoder_t *restrict c2, model_t *restrict model, float *restrict bg_est)
 {
 	static const float k = TWO_PI / CODEC2_RAND_MAX;
 
@@ -178,7 +178,7 @@ static void ear_protection(float *in_out, int n)
 }
 
 static void synthesise(
-	codec2_t *c2,
+	codec2_decoder_t *c2,
 	kiss_fftr_cfg fftr_inv_cfg,
 	float *Sn_,					   /* time domain synthesised signal              */
 	const model_t *restrict model, /* ptr to model parameters for this frame      */
@@ -241,7 +241,7 @@ static void synthesise(
 }
 
 void synthesise_one_frame(
-	codec2_t *c2,
+	codec2_decoder_t *c2,
 	int16_t *speech,
 	model_t *model,
 	const complex_t *Aw,
@@ -272,7 +272,7 @@ void synthesise_one_frame(
 	}
 }
 
-void synthesis_init(codec2_t *c2)
+void synthesis_init(codec2_decoder_t *c2)
 {
 	make_synthesis_window(c2->Pn);
 }

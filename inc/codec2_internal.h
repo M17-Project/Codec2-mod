@@ -125,45 +125,53 @@ typedef struct nlp_t
     complex_t Fw[PE_FFT_SIZE / 2 + 1];
 } nlp_t;
 
-typedef struct codec2_t
+typedef struct codec2_encoder_t
 {
-    uint32_t next_rn;
-
     float w[M_PITCH];
     float W[FFT_ENC];
-    float Pn[2 * N_SAMP];
     float Sn[M_PITCH];
     nlp_t nlp;
 
+    float prev_f0_enc;
+
+    kiss_fft_cfg fft_fwd_cfg;
+    kiss_fftr_cfg fftr_fwd_cfg;
+
+    kiss_fft_cpx fft_buffer[FFT_ENC];
+
+    uint8_t fft_fwd_mem[FFT_FWD_MEM_BYTES];
+    uint8_t fftr_fwd_mem[FFTR_MEM_BYTES];
+} codec2_encoder_t;
+
+typedef struct codec2_decoder_t
+{
+    uint32_t next_rn;
+
     float Sn_[2 * N_SAMP];
+    float Pn[2 * N_SAMP];
+
     float ex_phase;
     float bg_est;
-    float prev_f0_enc;
 
     model_t prev_model_dec;
     float prev_lsps_dec[LPC_ORD];
     float prev_e_dec;
 
-    kiss_fft_cfg fft_fwd_cfg;
     kiss_fftr_cfg fftr_fwd_cfg;
     kiss_fftr_cfg fftr_inv_cfg;
-    kiss_fft_cfg phase_fft_fwd_cfg;
-    kiss_fft_cfg phase_fft_inv_cfg;
 
-    kiss_fft_cpx fft_buffer[FFT_ENC];
+    kiss_fft_cpx fft_buffer[FFT_DEC];
 
-    /*
-     * fft_buffer scratch usage:
-     * - only one logical use at a time
-     * - no overlapping lifetimes
-     * - sizes are semantic (FFT_ENC, FFT_DEC)
-     * Violating this will cause silent DSP corruption.
-     */
-    uint8_t fft_fwd_mem[FFT_FWD_MEM_BYTES];
     uint8_t fftr_fwd_mem[FFTR_MEM_BYTES];
     uint8_t fftr_inv_mem[FFTR_MEM_BYTES];
+} codec2_decoder_t;
+
+typedef struct codec2_t
+{
+    codec2_encoder_t encoder;
+    codec2_decoder_t decoder;
 } codec2_t;
 
-_Static_assert(sizeof(((codec2_t *)0)->fft_buffer) >= FFT_ENC * sizeof(kiss_fft_cpx), "fft_buffer too small for FFT_ENC scratch");
+_Static_assert(sizeof(((codec2_t *)0)->encoder.fft_buffer) >= FFT_ENC * sizeof(kiss_fft_cpx), "fft_buffer too small for FFT_ENC scratch");
 
 #endif /* CODEC2_MOD_INTERNAL_H */
