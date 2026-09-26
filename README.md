@@ -86,11 +86,11 @@ codec2_t c2;
 
 codec2_init(&c2);
 
-codec2_encode(&c2, encoded, speech);
-codec2_decode(&c2, speech, encoded);
+codec2_encode(&c2.encoder, encoded, speech);
+codec2_decode(&c2.decoder, speech, encoded);
 ```
 
-No destroy/free function is required, however `codec2_init()` has to be called before switching between encoder/decoder use.
+No destroy/free function is required. The encoder and decoder can be initialized and used independently.
 
 ## Important notice: derivative work
 
