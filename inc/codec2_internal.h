@@ -110,7 +110,6 @@ typedef struct model_t
     float Wo;
     int L;
     float A[MAX_AMP + 1];
-    float phi[MAX_AMP + 1];
     int voiced;
 } model_t;
 
