@@ -5,7 +5,7 @@
 
 static void make_analysis_window(
 	codec2_encoder_t *c2,
-	kiss_fft_cfg fft_fwd_cfg,
+	kiss_fftr_cfg fftr_fwd_cfg,
 	float *restrict w,
 	float *restrict W)
 {
@@ -13,7 +13,8 @@ static void make_analysis_window(
 	static const int nw2 = NW / 2;
 	static const int fe2 = FFT_ENC / 2;
 
-	complex_t *restrict wshift = c2->fft_buffer;
+	complex_t *wf = c2->fft_buffer;
+	float *wshift = (float *)&c2->fft_buffer[fe2]; /* real input, upper half */
 
 	/* zero time-domain window */
 	memset(w, 0, M_PITCH * sizeof(float));
@@ -35,24 +36,22 @@ static void make_analysis_window(
 	for (int i = 0; i < M_PITCH; i++)
 		w[i] *= scale;
 
-	/* zero FFT buffer */
-	memset(wshift, 0, FFT_ENC * sizeof(*wshift));
-
 	/* circular shift */
+	memset(wshift, 0, FFT_ENC * sizeof(float));
 	for (int i = 0; i < nw2; i++)
-		wshift[i].r = w[i + mp2];
+		wshift[i] = w[i + mp2];
 
 	for (int i = FFT_ENC - nw2, j = mp2 - nw2; i < FFT_ENC; i++, j++)
-		wshift[i].r = w[j];
+		wshift[i] = w[j];
 
-	/* FFT */
-	kiss_fft(fft_fwd_cfg, wshift, wshift);
+	/* real FFT, bins 0..FFT_ENC/2 */
+	kiss_fftr(fftr_fwd_cfg, wshift, wf);
 
-	/* rearrange frequency response */
+	/* rearrange frequency response (real part is even-symmetric) */
 	for (int i = 0; i < fe2; i++)
 	{
-		W[i] = wshift[i + fe2].r;
-		W[i + fe2] = wshift[i].r;
+		W[i] = wf[fe2 - i].r; /* == bin i + fe2 */
+		W[i + fe2] = wf[i].r;
 	}
 }
 
@@ -286,22 +285,27 @@ static void est_voicing_mbe(model_t *restrict model, const complex_t *restrict S
 	}
 }
 
-static void dft_speech(kiss_fft_cfg fft_fwd_cfg, complex_t *Sw, const float *Sn, const float *w)
+static void dft_speech(kiss_fftr_cfg fftr_fwd_cfg, complex_t *Sw, const float *Sn, const float *w)
 {
-	memset(Sw, 0, FFT_ENC * sizeof(*Sw));
+	/* real input lives in the upper half of the scratch buffer; kiss_fftr()
+	   consumes all of it (into its private tmpbuf) before writing any output */
+	float *x = (float *)&Sw[FFT_ENC / 2];
+	memset(x, 0, FFT_ENC * sizeof(float));
 
-	/* Centre analysis window on time axis, we need to arrange input
-	   to FFT this way to make FFT phases correct */
-	/* move 2nd half to start of FFT input vector */
+	/* Centre analysis window on time axis */
 	for (int i = 0; i < NW / 2; i++)
-		Sw[i].r = Sn[i + M_PITCH / 2] * w[i + M_PITCH / 2];
-
-	/* move 1st half to end of FFT input vector */
+		x[i] = Sn[i + M_PITCH / 2] * w[i + M_PITCH / 2];
 	for (int i = 0; i < NW / 2; i++)
-		Sw[FFT_ENC - NW / 2 + i].r =
-			Sn[i + M_PITCH / 2 - NW / 2] * w[i + M_PITCH / 2 - NW / 2];
+		x[FFT_ENC - NW / 2 + i] = Sn[i + M_PITCH / 2 - NW / 2] * w[i + M_PITCH / 2 - NW / 2];
 
-	kiss_fft(fft_fwd_cfg, Sw, Sw);
+	kiss_fftr(fftr_fwd_cfg, x, Sw); /* bins 0..FFT_ENC/2 */
+
+	/* Hermitian mirror - pitch refinement deliberately reads past Nyquist */
+	for (int k = 1; k < FFT_ENC / 2; k++)
+	{
+		Sw[FFT_ENC - k].r = Sw[k].r;
+		Sw[FFT_ENC - k].i = -Sw[k].i;
+	}
 }
 
 void analyse_one_frame(
@@ -318,7 +322,7 @@ void analyse_one_frame(
 	for (int i = 0; i < N_SAMP; i++)
 		c2->Sn[i + M_PITCH - N_SAMP] = speech[i];
 
-	dft_speech(c2->fft_fwd_cfg, Sw, c2->Sn, c2->w);
+	dft_speech(c2->fftr_fwd_cfg, Sw, c2->Sn, c2->w);
 
 	/* Estimate pitch */
 	nlp(&c2->nlp, c2->Sn, &pitch, &c2->prev_f0_enc);
@@ -329,11 +333,11 @@ void analyse_one_frame(
 	two_stage_pitch_refinement(model, Sw);
 
 	/* estimate phases */
-	estimate_amplitudes(model, Sw, 1);
+	estimate_amplitudes(model, Sw, 0);
 	est_voicing_mbe(model, Sw, c2->W);
 }
 
 void analysis_init(codec2_encoder_t *c2)
 {
-	make_analysis_window(c2, c2->fft_fwd_cfg, c2->w, c2->W);
+	make_analysis_window(c2, c2->fftr_fwd_cfg, c2->w, c2->W);
 }

@@ -134,12 +134,10 @@ typedef struct codec2_encoder_t
 
     float prev_f0_enc;
 
-    kiss_fft_cfg fft_fwd_cfg;
     kiss_fftr_cfg fftr_fwd_cfg;
 
     kiss_fft_cpx fft_buffer[FFT_ENC];
 
-    uint8_t fft_fwd_mem[FFT_FWD_MEM_BYTES];
     uint8_t fftr_fwd_mem[FFTR_MEM_BYTES];
 } codec2_encoder_t;
 

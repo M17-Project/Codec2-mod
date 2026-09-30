@@ -57,13 +57,13 @@ static void sample_phase(
 static void phase_synth_zero_order(
 	codec2_decoder_t *c2,
 	model_t *model,
-	float *ex_phase,   /* excitation phase of fundamental        */
-	const complex_t *H /* L synthesis filter freq domain samples */
+	float *ex_phase,    /* excitation phase of fundamental        */
+	const complex_t *H, /* L synthesis filter freq domain samples */
+	complex_t *P
 )
 {
-	float new_phi;
-	complex_t Ex[MAX_AMP + 1]; /* excitation samples */
-	complex_t A_[MAX_AMP + 1]; /* synthesised harmonic samples */
+	complex_t Ex;
+	complex_t A_;
 
 	/*
 	   Update excitation fundamental phase track, this sets the position
@@ -81,38 +81,19 @@ static void phase_synth_zero_order(
 
 	for (int m = 1; m <= model->L; m++)
 	{
-		/* generate excitation */
-		if (model->voiced)
-		{
-			float s, c;
-			codec2_sincosf(phi0 * m, &s, &c);
-			Ex[m].r = c;
-			Ex[m].i = s;
-		}
-		else
-		{
-			/* When a few samples were tested I found that LPC filter
-			   phase is not needed in the unvoiced case, but no harm in
-			   keeping it.
-			*/
-			float phi = k * (float)codec2_rand(&c2->next_rn);
-			float s, c;
-			codec2_sincosf(phi, &s, &c);
-			Ex[m].r = c;
-			Ex[m].i = s;
-		}
+		float ph = model->voiced ? phi0 * m : k * (float)codec2_rand(&c2->next_rn);
+		codec2_sincosf(ph, &Ex.i, &Ex.r);
 
-		/* filter using LPC filter */
-		A_[m].r = H[m].r * Ex[m].r - H[m].i * Ex[m].i;
-		A_[m].i = H[m].i * Ex[m].r + H[m].r * Ex[m].i;
+		A_.r = H[m].r * Ex.r - H[m].i * Ex.i;
+		A_.i = H[m].i * Ex.r + H[m].r * Ex.i;
 
-		/* modify sinusoidal phase */
-		new_phi = fast_atan2f(A_[m].i, A_[m].r + 1e-12);
-		model->phi[m] = new_phi;
+		float inv = 1.0f / sqrtf(A_.r * A_.r + A_.i * A_.i + 1e-24f);
+		P[m].r = A_.r * inv;
+		P[m].i = A_.i * inv;
 	}
 }
 
-static void postfilter(codec2_decoder_t *restrict c2, model_t *restrict model, float *restrict bg_est)
+static void postfilter(codec2_decoder_t *restrict c2, model_t *restrict model, float *restrict bg_est, complex_t *restrict P)
 {
 	static const float k = TWO_PI / CODEC2_RAND_MAX;
 
@@ -142,7 +123,7 @@ static void postfilter(codec2_decoder_t *restrict c2, model_t *restrict model, f
 		{
 			if (model->A[m] < thresh)
 			{
-				model->phi[m] = k * (float)codec2_rand(&c2->next_rn);
+				codec2_sincosf(k * (float)codec2_rand(&c2->next_rn), &P[m].i, &P[m].r);
 			}
 		}
 	}
@@ -183,6 +164,7 @@ static void synthesise(
 	float *Sn_,					   /* time domain synthesised signal              */
 	const model_t *restrict model, /* ptr to model parameters for this frame      */
 	const float *restrict Pn,	   /* time domain Parzen window                   */
+	const complex_t *restrict P,
 	int shift					   /* flag used to handle transition frames       */
 )
 {
@@ -209,10 +191,8 @@ static void synthesise(
 		{
 			b = (FFT_DEC / 2) - 1;
 		}
-		float s, c;
-		codec2_sincosf(model->phi[l], &s, &c);
-		Sw_[b].r = model->A[l] * c;
-		Sw_[b].i = model->A[l] * s;
+		Sw_[b].r = model->A[l] * P[l].r;
+		Sw_[b].i = model->A[l] * P[l].i;
 	}
 
 	/* Perform inverse DFT */
@@ -247,12 +227,13 @@ void synthesise_one_frame(
 	const complex_t *Aw,
 	float gain)
 {
-	/* LPC based phase synthesis */
-	complex_t *H = (complex_t *)c2->fft_buffer; // use a chunk of that array as scratch
+	complex_t P[MAX_AMP + 1]; // harmonic phasors
+	complex_t *H = (complex_t *)c2->fft_buffer;
+
 	sample_phase(model, H, Aw);
-	phase_synth_zero_order(c2, model, &c2->ex_phase, H);
-	postfilter(c2, model, &c2->bg_est);
-	synthesise(c2, c2->fftr_inv_cfg, c2->Sn_, model, c2->Pn, 1);
+	phase_synth_zero_order(c2, model, &c2->ex_phase, H, P);
+	postfilter(c2, model, &c2->bg_est, P);
+	synthesise(c2, c2->fftr_inv_cfg, c2->Sn_, model, c2->Pn, P, 1);
 
 	for (int i = 0; i < N_SAMP; i++)
 	{
