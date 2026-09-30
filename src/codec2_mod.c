@@ -57,7 +57,6 @@ void codec2_decoder_init(codec2_decoder_t *c2)
 	c2->prev_model_dec.Wo = TWO_PI / P_MAX;
 	c2->prev_model_dec.L = M_PI / c2->prev_model_dec.Wo;
 	c2->prev_model_dec.voiced = 0;
-	memset(c2->prev_model_dec.phi, 0, sizeof(c2->prev_model_dec.phi));
 
 	for (int i = 0; i < LPC_ORD; i++)
 		c2->prev_lsps_dec[i] = i * M_PI / (LPC_ORD + 1);
@@ -106,7 +105,7 @@ void codec2_decode(codec2_decoder_t *c2, int16_t *speech, const uint8_t *bits)
 	int Wo_index, e_index;
 	float e[2];
 	float ak[2][LPC_ORD + 1];
-	complex_t Aw[FFT_ENC];
+	complex_t Aw[FFT_ENC / 2 + 1]; /* real FFT output: bins 0..FFT_ENC/2 */
 	float A2[FFT_ENC / 2];
 
 	/* unpack bits from channel ------------------------------------*/

@@ -133,7 +133,7 @@ static void two_stage_pitch_refinement(model_t *restrict model, const complex_t 
 	}
 }
 
-static void estimate_amplitudes(model_t *model, const complex_t *Sw, int est_phase)
+static void estimate_amplitudes(model_t *model, const complex_t *Sw)
 {
 	for (int m = 1; m <= model->L; m++)
 	{
@@ -156,18 +156,6 @@ static void estimate_amplitudes(model_t *model, const complex_t *Sw, int est_pha
 		}
 
 		model->A[m] = sqrtf(den);
-
-		/* recompute phases only for voiced speech :-) */
-		if (est_phase && model->voiced)
-		{
-			int b = (int)(m * model->Wo / FFT_R + 0.5); /* DFT bin of centre of current harmonic */
-			if (b >= FFT_ENC / 2)
-				b = FFT_ENC / 2 - 1;
-
-			/* Estimate phase of harmonic, this is expensive in CPU for
-			   embedded devices, so we make it an option */
-			model->phi[m] = fast_atan2f(Sw[b].i, Sw[b].r);
-		}
 	}
 }
 
@@ -333,7 +321,7 @@ void analyse_one_frame(
 	two_stage_pitch_refinement(model, Sw);
 
 	/* estimate phases */
-	estimate_amplitudes(model, Sw, 0);
+	estimate_amplitudes(model, Sw);
 	est_voicing_mbe(model, Sw, c2->W);
 }
 

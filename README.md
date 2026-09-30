@@ -70,20 +70,20 @@ Same target and build settings as above (`arm-none-eabi-gcc`, *-Os*, newlib-nano
 
 | Resource                          | Reference Codec2       | Codec2-mod `main` | Codec2-mod `split-no-doubles` |
 |-----------------------------------|------------------------|-------------------|-------------------------------|
-| Flash (code + constant data)²     | 167.2 KiB              | 23.8 KiB          | 19.6 KiB                      |
+| Flash (code + constant data)²     | 167.2 KiB              | 23.8 KiB          | 19.5 KiB                      |
 | Encoder state                     | 30.0 KiB³ (heap)       | 19.6 KiB (static) | 19.6 KiB (static)             |
-| Decoder state                     | (same instance)³       | 16.5 KiB (static) | 16.5 KiB (static)             |
+| Decoder state                     | (same instance)³       | 16.2 KiB (static) | 16.2 KiB (static)             |
 | Stack, encoder init               | 8.5 KiB                | 0.3 KiB           | 0.3 KiB                       |
 | Stack, decoder init               | 8.5 KiB                | 0.1 KiB           | 0.1 KiB                       |
-| Stack, `codec2_encode()`          | 14.1 KiB               | 1.3 KiB           | 1.3 KiB                       |
-| Stack, `codec2_decode()`          | 14.4 KiB               | 7.7 KiB           | 7.7 KiB                       |
+| Stack, `codec2_encode()`          | 14.1 KiB               | 1.0 KiB           | 1.0 KiB                       |
+| Stack, `codec2_decode()`          | 14.4 KiB               | 5.1 KiB           | 5.1 KiB                       |
 | Heap during encode/decode         | 0 B                    | 0 B               | 0 B                           |
 
 **²** Taken from the linker map files. Includes the parts of libm, of the soft-float library and (for the reference Codec2) of the heap allocator that the codec pulls in. The reference Codec2 cannot link only the 3200 bps mode,
 because `codec2_create()` references all modes.  
 **³** One `codec2_create()` instance holds both the encoder and the decoder state. The figure includes the allocator's overhead.
 
-For a full-duplex application, the total RAM (state + deepest stack) is similar: about 44 KiB for both reference Codec2 and Codec2-mod. Codec2-mod needs no heap, and an encoder-only or decoder-only application
+For a full-duplex application, the total RAM (state + deepest stack) is about 44 KiB for the reference Codec2 and about 41 KiB for Codec2-mod. Codec2-mod needs no heap, and an encoder-only or decoder-only application
 needs only the corresponding state.
 
 ## Branches
