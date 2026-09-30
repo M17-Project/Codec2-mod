@@ -2,6 +2,10 @@
 #include "util.h"
 #include "lpc.h"
 
+/* non-zero span of the analysis window w[] */
+#define W_START (M_PITCH / 2 - NW / 2)
+#define W_END (W_START + NW)
+
 /* ~15Hz bandwidth expansion */
 const float bw_gamma[LPC_ORD + 1] = {
     1.000000000000000,
@@ -23,9 +27,10 @@ static void autocorrelate(
 {
     for (int j = 0; j < LPC_ORD + 1; j++)
     {
-        Rn[j] = 0.0f;
-        for (int i = 0; i < M_PITCH - j; i++)
-            Rn[j] += Sn[i] * Sn[i + j];
+        float acc = 0.0f;
+        for (int i = W_START; i < W_END - j; i++)
+            acc += Sn[i] * Sn[i + j];
+        Rn[j] = acc;
     }
 }
 
@@ -310,6 +315,7 @@ void aks_to_mag2(codec2_decoder_t *c2,
     /* compute normalization gain */
     float e_before = 1e-12f;
     float e_after = 1e-12f;
+    float *Pw = A2;
 
     for (int i = 0; i < FFT_ENC / 2; i++)
     {
@@ -317,8 +323,13 @@ void aks_to_mag2(codec2_decoder_t *c2,
         float R = sqrtf(A2g[i] * invA2);
 
         e_before += invA2;
-        e_after += invA2 * expf(LPCPF_TWO_BETA * logf(R + 1e-5f));
+        Pw[i] = invA2 * fast_powf_pos(R + 1e-5f, LPCPF_TWO_BETA);
+        e_after += Pw[i];
     }
+
+    /* boost low frequencies a bit (< 1000 Hz) */
+    for (int i = 0; i < FFT_ENC / 2 * 1000 / (SAMP_RATE / 2); i++)
+        Pw[i] *= 1.96f;
 
     float gain = E * e_before / e_after;
 
@@ -327,32 +338,14 @@ void aks_to_mag2(codec2_decoder_t *c2,
     {
         am = (int)((m - 0.5f) * model->Wo / FFT_R + 0.5f);
         bm = (int)((m + 0.5f) * model->Wo / FFT_R + 0.5f);
-
         if (bm > FFT_ENC / 2)
             bm = FFT_ENC / 2;
 
         float Em = 0.0f;
-
         for (int i = am; i < bm; i++)
-        {
-            /* R(w) = |A_gamma| / |A| */
-            float R = sqrtf(A2g[i] / A2[i]);
+            Em += Pw[i];
 
-            /* Pw contribution */
-            float Pw_i = expf(LPCPF_TWO_BETA * logf(R + 1e-5f)) / A2[i];
-
-            /* boost low frequencies a bit */
-            float freq = i * (SAMP_RATE * 0.5f / (FFT_ENC / 2));
-            if (freq < 1000.0f)
-                Pw_i *= 1.96f;
-
-            Em += Pw_i;
-        }
-
-        /* apply LPC energy */
-        Em *= gain;
-
-        model->A[m] = sqrtf(Em);
+        model->A[m] = sqrtf(Em * gain);
     }
 }
 
@@ -382,7 +375,9 @@ float speech_to_uq_lsps(
     float *Wn = (float *)c2->fft_buffer;
 
     e = 0.0f;
-    for (int i = 0; i < M_PITCH; i++)
+    memset(Wn, 0, W_START * sizeof(float));
+    memset(&Wn[W_END], 0, (M_PITCH - W_END) * sizeof(float));
+    for (int i = W_START; i < W_END; i++)
     {
         Wn[i] = Sn[i] * w[i];
         e += Wn[i] * Wn[i];

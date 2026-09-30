@@ -20,9 +20,6 @@ void codec2_encoder_init(codec2_encoder_t *c2)
 
 	size_t mem;
 
-	mem = sizeof(c2->fft_fwd_mem);
-	c2->fft_fwd_cfg = kiss_fft_alloc(FFT_ENC, 0, c2->fft_fwd_mem, &mem);
-
 	mem = sizeof(c2->fftr_fwd_mem);
 	c2->fftr_fwd_cfg = kiss_fftr_alloc(FFT_ENC, 0, c2->fftr_fwd_mem, &mem);
 
