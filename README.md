@@ -11,6 +11,10 @@ The initial goal of this work was to:
 Bit-exactness with the reference Codec2 encoder has been verified using identical input signals and byte-for-byte comparison of encoded frames.
 Bit-exactness refers to the encoded bitstream - decoded audio samples may differ from the reference implementation.
 
+Both implementations call the C library's `cosf()` during analysis, so the exact bitstream depends on its accuracy.
+With an accurate `cosf()` (e.g. glibc), the encoded bitstreams are identical. With newlib-nano on a Cortex-M4,
+the two differ in 1 of 150 frames of `hts1a`.
+
 ## Motivation and goals
 
 > [!NOTE]
@@ -35,21 +39,56 @@ Compared to the reference Codec2 implementation, this fork already includes:
 - Removal of unused variables, modes, code paths, and legacy state not required for 3200 bps operation
 - Elimination of all persistent dynamic memory allocation (no runtime `malloc`/`free`)
 - Fully deterministic, fixed-size codec state suitable for static allocation
-- Reduced overall memory footprint compared to the reference implementation
+- Much smaller flash footprint, no heap use, and a much smaller encoder stack than the reference implementation (see [Memory usage](#memory-usage))
 - Verified bitstream compatibility with the reference Codec2 encoder
 
 These changes establish a stable and minimal baseline for further optimization and experimentation.
 
 ## Speed comparison
 
-STM32F405 at 168 MHz, FPU enabled, *-Os* optimizations:
+STM32F411RE at 100 MHz, FPU enabled, *-Os* optimizations, newlib-nano, KISS FFT in all builds.
+150 frames of `hts1a` (Codec2's standard test sample), timed per frame with the DWT cycle counter:
 
-| Task                  | Reference Codec2  | Codec2-mod | Gain  |
-|-----------------------|-------------------|------------|-------|
-| Encoding 1,000 frames | 9.804 s           | 4.341 s    | 2.25x |
-| Decoding 1,000 frames | 11.487 s          | 9.612 s    | 1.2x  |
+| Task                      | Reference Codec2 | Codec2-mod `main` | Codec2-mod `split-no-doubles` |
+|---------------------------|------------------|-------------------|-------------------------------|
+| Encoder init              | 18.07 ms¹        | 6.72 ms           | 3.08 ms                       |
+| Decoder init              | 18.06 ms¹        | 5.00 ms           | 3.20 ms                       |
+| Encode, avg / max         | 14.50 / 17.35 ms | 5.32 / 5.96 ms    | 4.17 / 4.55 ms                |
+| Decode, avg / max         | 14.71 / 17.97 ms | 7.14 / 9.26 ms    | 5.47 / 6.61 ms                |
+| Encode speedup (avg)      | 1×               | 2.7×              | 3.5×                          |
+| Decode speedup (avg)      | 1×               | 2.1×              | 2.7×                          |
+| CPU load, enc + dec (avg) | 146.0 %          | 62.3 %            | 48.1 %                        |
+
+¹ The reference Codec2 has a single `codec2_create()` for both directions. It includes the heap allocation and freeing the previous instance with `codec2_destroy()`.
+
+One frame lasts 20 ms. At 100 MHz, the reference Codec2 cannot encode and decode in real time simultaneously,
+not even on average. Both Codec2-mod variants can, even in the worst-case frame (15.2 ms and 11.2 ms, respectively).
+
+## Memory usage
+
+Same target and build settings as above (`arm-none-eabi-gcc`, *-Os*, newlib-nano):
+
+| Resource                          | Reference Codec2       | Codec2-mod `main` | Codec2-mod `split-no-doubles` |
+|-----------------------------------|------------------------|-------------------|-------------------------------|
+| Flash (code + constant data)²     | 167.2 KiB              | 23.8 KiB          | 19.6 KiB                      |
+| Encoder state                     | 30.0 KiB³ (heap)       | 19.6 KiB (static) | 19.6 KiB (static)             |
+| Decoder state                     | (same instance)³       | 16.5 KiB (static) | 16.5 KiB (static)             |
+| Stack, encoder init               | 8.5 KiB                | 0.3 KiB           | 0.3 KiB                       |
+| Stack, decoder init               | 8.5 KiB                | 0.1 KiB           | 0.1 KiB                       |
+| Stack, `codec2_encode()`          | 14.1 KiB               | 1.3 KiB           | 1.3 KiB                       |
+| Stack, `codec2_decode()`          | 14.4 KiB               | 7.7 KiB           | 7.7 KiB                       |
+| Heap during encode/decode         | 0 B                    | 0 B               | 0 B                           |
+
+**²** Taken from the linker map files. Includes the parts of libm, of the soft-float library and (for the reference Codec2) of the heap allocator that the codec pulls in. The reference Codec2 cannot link only the 3200 bps mode,
+because `codec2_create()` references all modes.  
+**³** One `codec2_create()` instance holds both the encoder and the decoder state. The figure includes the allocator's overhead.
+
+For a full-duplex application, the total RAM (state + deepest stack) is similar: about 44 KiB for both reference Codec2 and Codec2-mod. Codec2-mod needs no heap, and an encoder-only or decoder-only application
+needs only the corresponding state.
 
 ## Branches
+
+### `main`
 
 The `main` branch offers an encoder that is bitstream-compatible with the reference Codec2 implementation.
 The meaning, width, ordering, and allocation of all frame bit fields are all preserved. Bitstreams produced
@@ -58,8 +97,12 @@ by this encoder can be decoded by an unmodified Codec2 decoder (and vice versa).
 The internal DSP implementation, floating-point operations, and decoded audio
 signals are not required to be identical to the reference implementation.
 
-Other branches may introduce experimental DSP changes (e.g. post-filters,
-quantizers, or excitation models), potentially with a modified bitstream format.
+### `split-no-doubles`
+This branch gets rid of any double-precision arithmetic (usually by promotion).
+
+> [!NOTE]
+> Other branches may introduce experimental DSP changes (e.g. post-filters,
+> quantizers, or excitation models), potentially with a modified bitstream format.
 
 ## API differences vs. reference Codec2
 
